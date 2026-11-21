@@ -63,7 +63,7 @@ export const taskSocket = new Elysia().ws("/ws", {
   open(ws) {
     send(ws, { type: "connected" });
   },
-  message(ws, message) {
+  async message(ws, message) {
     const parsed = parseClientMessage(message);
 
     if (!parsed) {
@@ -80,7 +80,7 @@ export const taskSocket = new Elysia().ws("/ws", {
       return;
     }
 
-    const task = getTask(parsed.taskId);
+    const task = await getTask(parsed.taskId);
 
     if (!task) {
       send(ws, { type: "error", message: "Task not found" });

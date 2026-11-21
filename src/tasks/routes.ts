@@ -11,12 +11,12 @@ const urlBody = t.Object({
   url: t.String({ minLength: 1, maxLength: 2_048 }),
 });
 
-function enqueue(
+async function enqueue(
   kind: TaskKind,
   input: TaskInput,
   set: { status?: number | string },
 ) {
-  const task = createTask(kind, input);
+  const task = await createTask(kind, input);
   scheduleTask(task);
 
   set.status = 202;
@@ -46,8 +46,8 @@ export const taskRoutes = new Elysia()
   )
   .get(
     "/tasks/:id",
-    ({ params, set }) => {
-      const task = getTask(params.id);
+    async ({ params, set }) => {
+      const task = await getTask(params.id);
 
       if (!task) {
         set.status = 404;

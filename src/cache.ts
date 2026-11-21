@@ -38,6 +38,9 @@ const { store, backend } = await createCache();
 export const cache = store;
 export const cacheBackend = backend;
 
+// Shared KV store for other short-lived state, such as task snapshots.
+export const keyValueStore = store;
+
 export const cachePlugin = new Elysia({ name: "cache" })
   .decorate("cache", cache)
   .onStop(() => {

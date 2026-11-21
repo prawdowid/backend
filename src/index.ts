@@ -4,13 +4,18 @@ import { env } from "./env";
 import { setTaskPublisher } from "./tasks/events";
 import { taskRoutes } from "./tasks/routes";
 import { taskSocket } from "./tasks/socket";
+import { taskBackend } from "./tasks/store";
 
 const app = new Elysia()
   .use(cachePlugin)
   .use(taskRoutes)
   .use(taskSocket)
   .get("/", () => ({ message: "Hello World" }))
-  .get("/health", () => ({ status: "ok", cache: cacheBackend }))
+  .get("/health", () => ({
+    status: "ok",
+    cache: cacheBackend,
+    tasks: taskBackend(),
+  }))
   .get("/cached", async ({ cache, set }) => {
     const key = "cached:hello";
     const cached = await cache.get<{ message: string; generatedAt: string }>(key);

@@ -21,7 +21,7 @@ Bun loads `.env` automatically. The server listens on `http://localhost:3000` by
 | Variable    | Default | Description                                                                 |
 | ----------- | ------- | --------------------------------------------------------------------------- |
 | `PORT`      | `3000`  | HTTP port.                                                                  |
-| `REDIS_URL` | empty   | Optional Redis/Valkey URL. When empty, the cache stays in memory.           |
+| `REDIS_URL` | empty   | Optional Redis/Valkey URL for cache and task snapshots. Empty means memory. |
 
 Example:
 
@@ -30,7 +30,7 @@ PORT=3000
 REDIS_URL=redis://localhost:6379
 ```
 
-If `REDIS_URL` is set but Redis cannot be reached at startup, the app logs a warning and falls back to the in-memory cache instead of refusing to boot.
+If `REDIS_URL` is set but Redis cannot be reached at startup, the app logs a warning and falls back to in-memory storage instead of refusing to boot. If Redis goes away later, task snapshots fall back to memory and the app keeps running.
 
 ## Endpoints
 
@@ -39,7 +39,7 @@ curl http://localhost:3000/
 # {"message":"Hello World"}
 
 curl http://localhost:3000/health
-# {"status":"ok","cache":"memory"}
+# {"status":"ok","cache":"memory","tasks":"memory"}
 
 curl -i http://localhost:3000/cached
 # x-cache: MISS (memory)
@@ -75,7 +75,7 @@ curl http://localhost:3000/tasks/<taskId>
 # {"id":"...","kind":"text","status":"completed","progress":100,...}
 ```
 
-Tasks currently run in-process and are stored in memory for up to an hour after their last update. Restarting the server clears them; a durable queue (for example BullMQ + Redis) can be added later without changing the HTTP shape.
+Tasks run in-process and always have an in-memory copy for fast access. When Redis was available at startup, snapshots are also written through to Redis with a one-hour TTL, so `GET /tasks/:id` and WebSocket subscriptions can recover a task after a restart or from another instance. If Redis becomes unavailable, task persistence drops back to memory. The actual processing is still in-process, so a task that was mid-flight during a restart is not resumed; a durable queue (for example BullMQ + Redis) would be the next step.
 
 ## WebSocket updates
 
@@ -135,6 +135,7 @@ The cache is provided by [`@clov-std/kv-store`](https://www.npmjs.com/package/@c
 | ------------------- | ------------------------------- |
 | `bun run dev`       | Start with file watching        |
 | `bun run start`     | Start the server                |
+| `bun test`          | Run the tests                   |
 | `bun run typecheck` | Type-check with `tsc --noEmit`  |
 
 ## Docker

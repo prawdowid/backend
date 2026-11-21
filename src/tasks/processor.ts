@@ -16,11 +16,11 @@ const STEP_DELAY_MS: Record<TaskKind, number> = {
   url: 450,
 };
 
-function updateAndPublish(
+async function updateAndPublish(
   id: string,
   patch: Partial<Omit<Task, "id" | "createdAt">>,
-): void {
-  const task = updateTask(id, patch);
+): Promise<void> {
+  const task = await updateTask(id, patch);
   if (task) publishTask(task);
 }
 
@@ -31,11 +31,11 @@ export function scheduleTask(task: Task): void {
 }
 
 async function runTask(id: string): Promise<void> {
-  const task = getTask(id);
+  const task = await getTask(id);
   if (!task) return;
 
   try {
-    updateAndPublish(id, {
+    await updateAndPublish(id, {
       status: "running",
       progress: 5,
       step: "Starting",
@@ -45,24 +45,26 @@ async function runTask(id: string): Promise<void> {
 
     for (const [index, step] of steps.entries()) {
       await Bun.sleep(STEP_DELAY_MS[task.kind]);
-      updateAndPublish(id, {
+      await updateAndPublish(id, {
         progress: Math.round(((index + 1) / (steps.length + 1)) * 100),
         step,
       });
     }
 
     await Bun.sleep(STEP_DELAY_MS[task.kind]);
-    updateAndPublish(id, {
+    await updateAndPublish(id, {
       status: "completed",
       progress: 100,
       step: "Completed",
       result: buildResult(task),
     });
   } catch (error) {
-    updateAndPublish(id, {
+    await updateAndPublish(id, {
       status: "failed",
       step: "Failed",
       error: error instanceof Error ? error.message : String(error),
+    }).catch(() => {
+      // The task may already be gone; there is nowhere left to report to.
     });
   }
 }
