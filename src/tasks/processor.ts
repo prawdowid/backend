@@ -1,4 +1,8 @@
-import { publishTask } from "./events";
+import {
+  publishTaskCompleted,
+  publishTaskFailed,
+  publishTaskUpdate,
+} from "./events";
 import { getTask, updateTask } from "./store";
 import type { Task, TaskKind } from "./types";
 
@@ -21,7 +25,15 @@ async function updateAndPublish(
   patch: Partial<Omit<Task, "id" | "createdAt">>,
 ): Promise<void> {
   const task = await updateTask(id, patch);
-  if (task) publishTask(task);
+  if (!task) return;
+
+  publishTaskUpdate(task);
+
+  if (task.status === "completed") {
+    publishTaskCompleted(task);
+  } else if (task.status === "failed") {
+    publishTaskFailed(task);
+  }
 }
 
 export function scheduleTask(task: Task): void {

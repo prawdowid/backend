@@ -1,96 +1,92 @@
 import { Elysia } from "elysia";
-import { topicForTask } from "./events";
+import {
+  parseClientAction,
+  taskTopic,
+  type ServerEvent,
+  type SocketErrorCode,
+  type TaskCompletedEvent,
+  type TaskFailedEvent,
+  type TaskSnapshotEvent,
+} from "./protocol";
 import { getTask } from "./store";
-import type { TaskSnapshotEvent } from "./types";
 
-interface ClientMessage {
-  type: "subscribe" | "unsubscribe";
-  taskId: string;
+function send(ws: { send: (data: string) => unknown }, event: ServerEvent): void {
+  ws.send(JSON.stringify(event));
 }
 
-function decodeMessage(raw: unknown): string | null {
-  if (typeof raw === "string") return raw;
-  if (raw instanceof ArrayBuffer) return new TextDecoder().decode(raw);
-
-  if (ArrayBuffer.isView(raw)) {
-    return Buffer.from(
-      raw.buffer as ArrayBuffer,
-      raw.byteOffset,
-      raw.byteLength,
-    ).toString("utf8");
-  }
-
-  return null;
-}
-
-function parseClientMessage(raw: unknown): ClientMessage | null {
-  let value: unknown = raw;
-
-  if (
-    typeof raw === "string" ||
-    raw instanceof ArrayBuffer ||
-    ArrayBuffer.isView(raw)
-  ) {
-    const text = decodeMessage(raw);
-    if (text === null) return null;
-
-    try {
-      value = JSON.parse(text) as unknown;
-    } catch {
-      return null;
-    }
-  }
-
-  if (!value || typeof value !== "object") return null;
-
-  const { type, taskId } = value as Record<string, unknown>;
-  if (
-    (type === "subscribe" || type === "unsubscribe") &&
-    typeof taskId === "string" &&
-    taskId.length > 0
-  ) {
-    return { type, taskId };
-  }
-
-  return null;
-}
-
-function send(ws: { send: (data: string) => unknown }, payload: unknown): void {
-  ws.send(JSON.stringify(payload));
+function sendError(
+  ws: { send: (data: string) => unknown },
+  code: SocketErrorCode,
+  message: string,
+): void {
+  send(ws, { type: "error", data: { code, message } });
 }
 
 export const taskSocket = new Elysia().ws("/ws", {
   open(ws) {
-    send(ws, { type: "connected" });
+    send(ws, {
+      type: "connected",
+      data: { message: "Send a subscribe or unsubscribe action." },
+    });
   },
   async message(ws, message) {
-    const parsed = parseClientMessage(message);
+    const action = parseClientAction(message);
 
-    if (!parsed) {
+    if (!action) {
+      sendError(
+        ws,
+        "invalid_action",
+        'Expected {"action":"subscribe","taskId":"<uuid>"} or {"action":"unsubscribe","taskId":"<uuid>"}',
+      );
+      return;
+    }
+
+    const topic = taskTopic(action.taskId);
+
+    if (action.action === "unsubscribe") {
+      ws.unsubscribe(topic);
       send(ws, {
-        type: "error",
-        message: 'Expected {"type":"subscribe","taskId":"<uuid>"}',
+        type: "unsubscribed",
+        data: { taskId: action.taskId, topic },
       });
       return;
     }
 
-    if (parsed.type === "unsubscribe") {
-      ws.unsubscribe(topicForTask(parsed.taskId));
-      send(ws, { type: "unsubscribed", taskId: parsed.taskId });
-      return;
-    }
-
-    const task = await getTask(parsed.taskId);
+    const task = await getTask(action.taskId);
 
     if (!task) {
-      send(ws, { type: "error", message: "Task not found" });
+      sendError(ws, "task_not_found", "Task not found");
       return;
     }
 
-    ws.subscribe(topicForTask(parsed.taskId));
+    ws.subscribe(topic);
+    send(ws, {
+      type: "subscribed",
+      data: { taskId: action.taskId, topic },
+    });
     send(ws, {
       type: "task.snapshot",
-      task,
+      data: { task },
     } satisfies TaskSnapshotEvent);
+
+    if (task.status === "completed") {
+      send(ws, {
+        type: "task.completed",
+        data: {
+          taskId: task.id,
+          result: task.result,
+          completedAt: task.updatedAt,
+        },
+      } satisfies TaskCompletedEvent);
+    } else if (task.status === "failed") {
+      send(ws, {
+        type: "task.failed",
+        data: {
+          taskId: task.id,
+          error: task.error ?? "Task failed",
+          failedAt: task.updatedAt,
+        },
+      } satisfies TaskFailedEvent);
+    }
   },
 });

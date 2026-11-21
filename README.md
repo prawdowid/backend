@@ -86,20 +86,30 @@ Tasks run in-process and always have an in-memory copy for fast access. When Red
 
 ## WebSocket updates
 
-Elysia has built-in WebSocket support through Bun. Connect to `ws://localhost:3000/ws` and subscribe with the task UUID:
+Elysia has built-in WebSocket support through Bun. Connect to `ws://localhost:3000/ws`.
+
+Client actions:
 
 ```json
-{"type":"subscribe","taskId":"<uuid>"}
+{"action":"subscribe","taskId":"<uuid>"}
+{"action":"unsubscribe","taskId":"<uuid>"}
 ```
 
-The server sends:
+Server events always use a `{ type, data }` envelope:
 
-```json
-{"type":"connected"}
-{"type":"task.snapshot","task":{...}}
-{"type":"task.update","task":{...}}
-{"type":"error","message":"..."}
+```ts
+type ServerEvent =
+  | { type: "connected"; data: { message: string } }
+  | { type: "subscribed"; data: { taskId: string; topic: string } }
+  | { type: "unsubscribed"; data: { taskId: string; topic: string } }
+  | { type: "task.snapshot"; data: { task: Task } }
+  | { type: "task.update"; data: { task: Task } }
+  | { type: "task.completed"; data: { taskId: string; result: unknown; completedAt: string } }
+  | { type: "task.failed"; data: { taskId: string; error: string; failedAt: string } }
+  | { type: "error"; data: { code: "invalid_action" | "task_not_found"; message: string } };
 ```
+
+`task.completed` and `task.failed` are explicit terminal events. A late subscriber gets the current `task.snapshot` plus the terminal event if the task already finished. Intermediate progress arrives as `task.update`.
 
 Minimal client:
 
@@ -112,17 +122,19 @@ const response = await fetch("http://localhost:3000/process/text", {
 const { taskId } = await response.json();
 
 const ws = new WebSocket("ws://localhost:3000/ws");
-ws.onopen = () => ws.send(JSON.stringify({ type: "subscribe", taskId }));
+ws.onopen = () => ws.send(JSON.stringify({ action: "subscribe", taskId }));
 ws.onmessage = (event) => {
   const message = JSON.parse(event.data);
   console.log(message);
-  if (message.type === "task.update" && message.task.status === "completed") {
-    ws.close();
+
+  if (message.type === "task.completed") {
+    console.log("Finished:", message.data.result);
+    ws.send(JSON.stringify({ action: "unsubscribe", taskId }));
   }
 };
 ```
 
-Statuses move from `queued` to `running` (with `progress` and `step`) to `completed` or `failed`. To stop listening, send `{"type":"unsubscribe","taskId":"<uuid>"}`.
+The protocol types live in `src/tasks/protocol.ts`.
 
 ## Cache
 

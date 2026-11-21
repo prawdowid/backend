@@ -24,13 +24,3 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
 }
-
-export interface TaskUpdateEvent {
-  type: "task.update";
-  task: Task;
-}
-
-export interface TaskSnapshotEvent {
-  type: "task.snapshot";
-  task: Task;
-}
