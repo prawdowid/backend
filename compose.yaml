@@ -1,0 +1,59 @@
+name: backend
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: backend:latest
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      PORT: 3000
+      # Points at the redis service below unless REDIS_URL is set in the shell or
+      # .env. Setting REDIS_URL= (empty) in .env keeps cache and tasks in memory.
+      REDIS_URL: ${REDIS_URL-redis://redis:6379}
+    env_file:
+      # Optional. Holds the provider keys from .env.example; not baked into the image.
+      - path: .env
+        required: false
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    stop_grace_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --save
+      - "60"
+      - "1"
+    volumes:
+      - redis-data:/data
+    # Redis is only reachable on the internal network. Uncomment to debug locally.
+    # ports:
+    #   - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  redis-data:

@@ -238,3 +238,28 @@ docker run --rm -p 3000:3000 \
 ```
 
 Set `PORT` too if you want the container to listen somewhere other than `3000`.
+
+### Compose
+
+```bash
+docker compose up --build        # API + Redis
+docker compose down              # stop, keep the Redis volume
+docker compose down -v           # stop and drop the Redis volume
+```
+
+`docker compose up` on its own reuses an existing `backend:latest` image and
+will **not** pick up source changes. Always pass `--build` (or run
+`docker compose build` first) after editing code. Dependency changes in
+`package.json` or `bun.lock` need a rebuild too.
+
+For live reload during development, use the overlay. It bind-mounts `./src`
+and starts `bun --watch`, so saving a file restarts the server in the
+container:
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml up --build
+```
+
+The image only installs production dependencies, so `bun test` and
+`bun run typecheck` are not available inside that container. Run them on the
+host instead.

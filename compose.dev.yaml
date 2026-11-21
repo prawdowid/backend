@@ -1,0 +1,18 @@
+# Development overlay. Mounts ./src into the running container and runs
+# `bun --watch`, so edits on the host restart the server immediately.
+#
+#   docker compose -f compose.yaml -f compose.dev.yaml up --build
+#
+# The image still has the production dependencies from the Dockerfile. Run
+# --build after changing package.json or bun.lock so they get installed.
+#
+# If you would rather not bind-mount, `docker compose watch` can sync files
+# using the `develop.watch` block instead (Compose 2.17+).
+
+services:
+  api:
+    command: ["bun", "run", "dev"]
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ./src:/app/src
