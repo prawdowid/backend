@@ -1,7 +1,20 @@
 import { t } from "elysia" 
 
+const Base64Schema = t.String({
+  format: 'byte',
+  pattern: '^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$',
+  minLength: 4,
+  maxLength: 8_000_000,
+  error: 'must be a valid base64 string'
+})
+
 export const ProcessURLSchema = t.Object({
-    url: t.String()
+  url: t.String({
+    format: 'url',
+    pattern: '^https?://',
+    maxLength: 2048,
+    error: 'must be a valid http(s) URL'
+  })
 })
 
 export const ProcessTextSchema = t.Object({
@@ -13,5 +26,5 @@ export const ProcessVideoSchema = t.Object({
 })
 
 export const ProcessImageSchema = t.Object({
-    image: t.String()
+  image: Base64Schema
 })

@@ -13,7 +13,7 @@ export class OpenRouterWrapper {
 
         const res = await this.client.systemOne.create({
             decisionsRequest: {
-                model: "typesafe/jev-latest",
+                model: process.env["OPENROUTER_RLCD_MODEL"] ?? "typesafe/jev-latest",
                 state, questions,
             },
         });
