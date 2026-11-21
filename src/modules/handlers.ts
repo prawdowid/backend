@@ -1,8 +1,8 @@
 import { ProcessImageSchema, ProcessTextSchema, ProcessURLSchema, ProcessVideoSchema } from "./schemas";
 
 type ProcessURLBody = typeof ProcessURLSchema.static
-type ProcessImageBody = typeof ProcessImageSchema.static
 type ProcessTextBody = typeof ProcessTextSchema.static
+type ProcessImageBody = typeof ProcessImageSchema.static
 type ProcessVideoBody = typeof ProcessVideoSchema.static
 
 export async function processUrl({ body }: { body: ProcessURLBody }) {
