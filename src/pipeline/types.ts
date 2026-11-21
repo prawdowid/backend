@@ -70,6 +70,12 @@ export interface SummaryResult {
   costUsd: number;
 }
 
+export interface TranscriptResult {
+  text: string;
+  model: string;
+  costUsd: number;
+}
+
 export interface RagEntryInput {
   text: string;
   verdict: Verdict;

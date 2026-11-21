@@ -51,7 +51,7 @@ async function gateClaim(bundle: ClaimBundle): Promise<GateResult> {
     }
   }
 
-  if (env.openRouterApiKey) {
+  if (env.deepseekApiKey) {
     try {
       return await gateWithDeepSeek(bundle);
     } catch (error) {
@@ -78,7 +78,7 @@ function extractiveSummary(bundle: ClaimBundle): SummaryResult {
 }
 
 async function summarizeClaim(bundle: ClaimBundle): Promise<SummaryResult> {
-  if (env.openRouterApiKey) {
+  if (env.deepseekApiKey) {
     try {
       return await summarizeWithDeepSeek(bundle);
     } catch (error) {

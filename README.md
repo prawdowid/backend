@@ -1,6 +1,6 @@
 # backend
 
-Minimal [ElysiaJS](https://elysiajs.com/) + [Bun](https://bun.sh/) API with async task processing, WebSocket updates, Swagger UI, and an optional Redis cache.
+Minimal [ElysiaJS](https://elysiajs.com/) + [Bun](https://bun.sh/) API with async task processing, a text fact-checking pipeline, WebSocket updates, Swagger UI, and an optional Redis cache.
 
 ## Requirements
 
@@ -22,9 +22,16 @@ Bun loads `.env` automatically. The server listens on `http://localhost:3000` by
 | --- | --- | --- |
 | `PORT` | `3000` | HTTP port. |
 | `REDIS_URL` | empty | Optional Redis/Valkey URL for cache and task snapshots. Empty means memory. |
-| `OPENROUTER_API_KEY` | empty | Enables DeepSeek chat and embeddings through OpenRouter. |
-| `DEEPSEEK_MODEL` | `deepseek/deepseek-chat` | OpenRouter model used for gate/summary. |
+| `DEEPSEEK_API_KEY` | empty | Enables DeepSeek chat completions and optional ASR. |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek API base URL. |
+| `DEEPSEEK_MODEL` | `deepseek-flash` | DeepSeek model used for gate/summary. |
+| `DEEPSEEK_INPUT_USD_PER_1M_TOKENS` | `0.30` | Input rate for cost tracking. |
+| `DEEPSEEK_OUTPUT_USD_PER_1M_TOKENS` | `1.20` | Output rate for cost tracking. |
+| `DEEPSEEK_ASR_USD_PER_HOUR` | `0.116` | DeepSeek transcript rate. |
+| `OPENROUTER_API_KEY` | empty | Enables OpenRouter embeddings and optional transcription. |
 | `EMBEDDING_MODEL` | `openai/text-embedding-3-small` | OpenRouter embedding model. |
+| `TRANSCRIPT_PROVIDER` | `auto` | `auto`, `openrouter`, or `deepseek`. |
+| `TRANSCRIPT_MODEL` | `openai/whisper-large-v3` | OpenRouter transcription model. |
 | `TYPESAFE_API_KEY` | empty | Enables the TypeSafe Jev claim gate. |
 | `JEV_MODEL` | `jev-latest` | Jev model. |
 | `JEV_CHECKABLE_THRESHOLD` | `0.6` | Probability needed to treat a claim as checkable. |
@@ -39,6 +46,7 @@ Example:
 ```dotenv
 PORT=3000
 REDIS_URL=redis://localhost:6379
+DEEPSEEK_API_KEY=sk-...
 OPENROUTER_API_KEY=sk-or-...
 TYPESAFE_API_KEY=...
 ```
@@ -105,12 +113,15 @@ The text pipeline is wired as:
 ingest → claim gate → summary/claims → RAG lookup → Tier 2 (not wired) → result
 ```
 
-- **Gate:** Jev when `TYPESAFE_API_KEY` is set, otherwise DeepSeek via OpenRouter, otherwise a local heuristic.
-- **Summary:** DeepSeek via OpenRouter when configured, otherwise an extractive fallback.
+- **Gate:** Jev when `TYPESAFE_API_KEY` is set, otherwise DeepSeek's own API, otherwise a local heuristic.
+- **Summary:** DeepSeek's own API when configured, otherwise an extractive fallback.
 - **RAG:** OpenRouter embeddings when configured, otherwise local hashed embeddings. Entries are cached in memory and written through to Redis when available.
+- **Transcript:** `src/ai/transcript.ts` returns plain text only, with no timestamps or segments. It can use OpenRouter transcription or DeepSeek ASR (`TRANSCRIPT_PROVIDER=auto|openrouter|deepseek`).
 - **Tier 2:** not wired yet. On a RAG miss the task completes as `unverifiable` rather than guessing. A search provider plus the judge/cross-check stage is the remaining piece.
-- **Non-text adapters:** image, video, and URL ingestion are not implemented yet; those tasks currently complete as `unverifiable` with an adapter reason.
-- **Budget:** each provider call adds to `costUsd`; the task stops at `REQUEST_BUDGET_USD`.
+- **Non-text adapters:** image, video, and URL ingestion are not implemented yet; those tasks currently complete as `unverifiable` with an adapter reason. The transcript module is ready for the video adapter.
+- **Budget:** each DeepSeek/OpenRouter call adds to `costUsd`; the task stops at `REQUEST_BUDGET_USD`. Jev usage is not priced yet.
+
+Transcripts are normalized to a single `text` string. Provider timestamps, words, and segments are intentionally ignored. DeepSeek ASR accepts WAV/Ogg up to 120 seconds and 8 MiB; OpenRouter transcription is the fallback for longer or other formats.
 
 Result shape:
 
@@ -133,8 +144,9 @@ interface FactCheckResult {
 Provider modules:
 
 - `src/ai/jev.ts` — typed Jev gate.
-- `src/ai/deepseek.ts` — OpenRouter chat with JSON-schema outputs.
-- `src/rag.ts` — embeddings, local fallback, Redis-backed cache index.
+- `src/ai/deepseek.ts` — direct DeepSeek chat completions with validated JSON output.
+- `src/ai/transcript.ts` — plain-text transcription through OpenRouter or DeepSeek ASR.
+- `src/rag.ts` — OpenRouter embeddings, local fallback, Redis-backed cache index.
 - `src/pipeline/orchestrator.ts` — stage machine, fallbacks, budget, result assembly.
 
 ## WebSocket updates

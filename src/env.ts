@@ -38,14 +38,44 @@ function integerEnv(
   return value;
 }
 
+const transcriptProvider = optional("TRANSCRIPT_PROVIDER") ?? "auto";
+
+if (
+  transcriptProvider !== "auto" &&
+  transcriptProvider !== "openrouter" &&
+  transcriptProvider !== "deepseek"
+) {
+  throw new Error(
+    `Invalid TRANSCRIPT_PROVIDER "${transcriptProvider}": expected auto, openrouter, or deepseek`,
+  );
+}
+
 export const env = {
   port: integerEnv("PORT", 3000, 1, 65_535),
   redisUrl: optional("REDIS_URL"),
 
+  deepseekApiKey: optional("DEEPSEEK_API_KEY"),
+  deepseekBaseUrl:
+    optional("DEEPSEEK_BASE_URL") ?? "https://api.deepseek.com",
+  deepseekModel: optional("DEEPSEEK_MODEL") ?? "deepseek-flash",
+  deepseekInputUsdPer1M: numberEnv(
+    "DEEPSEEK_INPUT_USD_PER_1M_TOKENS",
+    0.3,
+    0,
+  ),
+  deepseekOutputUsdPer1M: numberEnv(
+    "DEEPSEEK_OUTPUT_USD_PER_1M_TOKENS",
+    1.2,
+    0,
+  ),
+  deepseekAsrUsdPerHour: numberEnv("DEEPSEEK_ASR_USD_PER_HOUR", 0.116, 0),
+
   openRouterApiKey: optional("OPENROUTER_API_KEY"),
-  deepseekModel: optional("DEEPSEEK_MODEL") ?? "deepseek/deepseek-chat",
   embeddingModel:
     optional("EMBEDDING_MODEL") ?? "openai/text-embedding-3-small",
+  transcriptProvider,
+  transcriptModel:
+    optional("TRANSCRIPT_MODEL") ?? "openai/whisper-large-v3",
   aiTimeoutMs: integerEnv("AI_TIMEOUT_MS", 20_000, 1_000),
 
   typeSafeApiKey: optional("TYPESAFE_API_KEY"),
