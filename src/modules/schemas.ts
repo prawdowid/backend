@@ -8,21 +8,23 @@ const Base64Schema = t.String({
   error: 'must be a valid base64 string'
 })
 
+const HttpURLSchema = t.String({
+  format: 'url',
+  pattern: '^https?://',
+  maxLength: 2048,
+  error: 'must be a valid http(s) URL'
+})
+
 export const ProcessURLSchema = t.Object({
-  url: t.String({
-    format: 'url',
-    pattern: '^https?://',
-    maxLength: 2048,
-    error: 'must be a valid http(s) URL'
-  })
+  url: HttpURLSchema
 })
 
 export const ProcessTextSchema = t.Object({
-    text: t.String()
+    text: t.String({ minLength: 1, maxLength: 100_000 })
 })
 
 export const ProcessVideoSchema = t.Object({
-    video: t.String()
+    video: HttpURLSchema
 })
 
 export const ProcessImageSchema = t.Object({
