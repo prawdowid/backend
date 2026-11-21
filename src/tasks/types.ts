@@ -1,3 +1,5 @@
+import type { FactCheckResult, PipelineStage } from "../pipeline/types";
+
 export type TaskKind = "text" | "image" | "video" | "url";
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed";
@@ -16,11 +18,13 @@ export interface Task {
   id: string;
   kind: TaskKind;
   status: TaskStatus;
+  stage?: PipelineStage;
   progress: number;
   step: string;
   input: TaskInput;
-  result?: unknown;
+  result?: FactCheckResult;
   error?: string;
+  costUsd?: number;
   createdAt: string;
   updatedAt: string;
 }

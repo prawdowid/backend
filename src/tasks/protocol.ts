@@ -1,3 +1,4 @@
+import type { FactCheckResult } from "../pipeline/types";
 import type { Task } from "./types";
 
 export type TaskTopic = `task:${string}`;
@@ -57,7 +58,7 @@ export interface TaskCompletedEvent {
   type: "task.completed";
   data: {
     taskId: string;
-    result: unknown;
+    result: FactCheckResult;
     completedAt: string;
   };
 }

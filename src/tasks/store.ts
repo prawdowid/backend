@@ -48,9 +48,11 @@ export async function createTask(
     id: crypto.randomUUID(),
     kind,
     status: "queued",
+    stage: "queued",
     progress: 0,
     step: "Queued",
     input,
+    costUsd: 0,
     createdAt: now,
     updatedAt: now,
   };

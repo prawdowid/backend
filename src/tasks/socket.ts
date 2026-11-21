@@ -69,7 +69,7 @@ export const taskSocket = new Elysia().ws("/ws", {
       data: { task },
     } satisfies TaskSnapshotEvent);
 
-    if (task.status === "completed") {
+    if (task.status === "completed" && task.result) {
       send(ws, {
         type: "task.completed",
         data: {

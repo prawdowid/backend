@@ -28,6 +28,8 @@ export function publishTaskUpdate(task: Task): void {
 }
 
 export function publishTaskCompleted(task: Task): void {
+  if (!task.result) return;
+
   publish(taskTopic(task.id), {
     type: "task.completed",
     data: {

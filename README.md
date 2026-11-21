@@ -18,19 +18,32 @@ Bun loads `.env` automatically. The server listens on `http://localhost:3000` by
 
 ### Environment
 
-| Variable    | Default | Description                                                                 |
-| ----------- | ------- | --------------------------------------------------------------------------- |
-| `PORT`      | `3000`  | HTTP port.                                                                  |
-| `REDIS_URL` | empty   | Optional Redis/Valkey URL for cache and task snapshots. Empty means memory. |
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PORT` | `3000` | HTTP port. |
+| `REDIS_URL` | empty | Optional Redis/Valkey URL for cache and task snapshots. Empty means memory. |
+| `OPENROUTER_API_KEY` | empty | Enables DeepSeek chat and embeddings through OpenRouter. |
+| `DEEPSEEK_MODEL` | `deepseek/deepseek-chat` | OpenRouter model used for gate/summary. |
+| `EMBEDDING_MODEL` | `openai/text-embedding-3-small` | OpenRouter embedding model. |
+| `TYPESAFE_API_KEY` | empty | Enables the TypeSafe Jev claim gate. |
+| `JEV_MODEL` | `jev-latest` | Jev model. |
+| `JEV_CHECKABLE_THRESHOLD` | `0.6` | Probability needed to treat a claim as checkable. |
+| `RAG_TOP_K` | `5` | Candidates considered per lookup. |
+| `RAG_MIN_SCORE` | `0.82` | Similarity needed for a cache hit. |
+| `RAG_TTL_SECONDS` | `604800` | Fact-check cache TTL (7 days). |
+| `REQUEST_BUDGET_USD` | `0.05` | Per-task spend cap. |
+| `AI_TIMEOUT_MS` | `20000` | Timeout per provider request. |
 
 Example:
 
 ```dotenv
 PORT=3000
 REDIS_URL=redis://localhost:6379
+OPENROUTER_API_KEY=sk-or-...
+TYPESAFE_API_KEY=...
 ```
 
-If `REDIS_URL` is set but Redis cannot be reached at startup, the app logs a warning and falls back to in-memory storage instead of refusing to boot. If Redis goes away later, task snapshots fall back to memory and the app keeps running.
+If `REDIS_URL` is set but Redis cannot be reached at startup, the app logs a warning and falls back to in-memory storage instead of refusing to boot. If Redis goes away later, task snapshots fall back to memory and the app keeps running. Leave the AI keys empty to run with the local fallbacks.
 
 ## Endpoints
 
@@ -83,6 +96,46 @@ curl http://localhost:3000/tasks/<taskId>
 ```
 
 Tasks run in-process and always have an in-memory copy for fast access. When Redis was available at startup, snapshots are also written through to Redis with a one-hour TTL, so `GET /tasks/:id` and WebSocket subscriptions can recover a task after a restart or from another instance. If Redis becomes unavailable, task persistence drops back to memory. The actual processing is still in-process, so a task that was mid-flight during a restart is not resumed; a durable queue (for example BullMQ + Redis) would be the next step.
+
+## AI pipeline
+
+The text pipeline is wired as:
+
+```text
+ingest → claim gate → summary/claims → RAG lookup → Tier 2 (not wired) → result
+```
+
+- **Gate:** Jev when `TYPESAFE_API_KEY` is set, otherwise DeepSeek via OpenRouter, otherwise a local heuristic.
+- **Summary:** DeepSeek via OpenRouter when configured, otherwise an extractive fallback.
+- **RAG:** OpenRouter embeddings when configured, otherwise local hashed embeddings. Entries are cached in memory and written through to Redis when available.
+- **Tier 2:** not wired yet. On a RAG miss the task completes as `unverifiable` rather than guessing. A search provider plus the judge/cross-check stage is the remaining piece.
+- **Non-text adapters:** image, video, and URL ingestion are not implemented yet; those tasks currently complete as `unverifiable` with an adapter reason.
+- **Budget:** each provider call adds to `costUsd`; the task stops at `REQUEST_BUDGET_USD`.
+
+Result shape:
+
+```ts
+interface FactCheckResult {
+  checkable: boolean;
+  verdict: "true" | "fake" | "misleading" | "unverifiable";
+  confidence: number;
+  summary: string;
+  claims: string[];
+  evidence: Evidence[];
+  cached: boolean;
+  cacheScore?: number;
+  costUsd: number;
+  modelVersion: string;
+  reason?: string;
+}
+```
+
+Provider modules:
+
+- `src/ai/jev.ts` — typed Jev gate.
+- `src/ai/deepseek.ts` — OpenRouter chat with JSON-schema outputs.
+- `src/rag.ts` — embeddings, local fallback, Redis-backed cache index.
+- `src/pipeline/orchestrator.ts` — stage machine, fallbacks, budget, result assembly.
 
 ## WebSocket updates
 

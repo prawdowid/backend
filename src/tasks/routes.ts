@@ -24,6 +24,36 @@ const acceptedResponse = t.Object({
   status: t.Literal("queued"),
 });
 
+const evidenceResponse = t.Object({
+  title: t.String(),
+  url: t.String(),
+  snippet: t.String(),
+  stance: t.Union([
+    t.Literal("supports"),
+    t.Literal("refutes"),
+    t.Literal("neutral"),
+  ]),
+});
+
+const factCheckResultResponse = t.Object({
+  checkable: t.Boolean(),
+  verdict: t.Union([
+    t.Literal("true"),
+    t.Literal("fake"),
+    t.Literal("misleading"),
+    t.Literal("unverifiable"),
+  ]),
+  confidence: t.Number({ minimum: 0, maximum: 1 }),
+  summary: t.String(),
+  claims: t.Array(t.String()),
+  evidence: t.Array(evidenceResponse),
+  cached: t.Boolean(),
+  cacheScore: t.Optional(t.Number()),
+  costUsd: t.Number(),
+  modelVersion: t.String(),
+  reason: t.Optional(t.String()),
+});
+
 const taskResponse = t.Object({
   id: t.String(),
   kind: t.Union([
@@ -38,14 +68,27 @@ const taskResponse = t.Object({
     t.Literal("completed"),
     t.Literal("failed"),
   ]),
+  stage: t.Optional(
+    t.Union([
+      t.Literal("queued"),
+      t.Literal("ingest"),
+      t.Literal("gate"),
+      t.Literal("summary"),
+      t.Literal("rag"),
+      t.Literal("fact_check"),
+      t.Literal("verdict"),
+      t.Literal("cache_write"),
+    ]),
+  ),
   progress: t.Number({ minimum: 0, maximum: 100 }),
   step: t.String(),
   input: t.Object({
     text: t.Optional(t.String()),
     url: t.Optional(t.String()),
   }),
-  result: t.Optional(t.Any()),
+  result: t.Optional(factCheckResultResponse),
   error: t.Optional(t.String()),
+  costUsd: t.Optional(t.Number()),
   createdAt: t.String(),
   updatedAt: t.String(),
 });
