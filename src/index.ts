@@ -1,9 +1,14 @@
 import { Elysia } from "elysia";
 import { cacheBackend, cachePlugin } from "./cache";
 import { env } from "./env";
+import { setTaskPublisher } from "./tasks/events";
+import { taskRoutes } from "./tasks/routes";
+import { taskSocket } from "./tasks/socket";
 
 const app = new Elysia()
   .use(cachePlugin)
+  .use(taskRoutes)
+  .use(taskSocket)
   .get("/", () => ({ message: "Hello World" }))
   .get("/health", () => ({ status: "ok", cache: cacheBackend }))
   .get("/cached", async ({ cache, set }) => {
@@ -26,6 +31,10 @@ const app = new Elysia()
     return response;
   })
   .listen(env.port);
+
+setTaskPublisher((topic, event) => {
+  app.server?.publish(topic, JSON.stringify(event));
+});
 
 console.log(
   `Elysia is running at http://${app.server?.hostname}:${app.server?.port}`,

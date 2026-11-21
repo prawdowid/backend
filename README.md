@@ -1,6 +1,6 @@
 # backend
 
-Minimal [ElysiaJS](https://elysiajs.com/) + [Bun](https://bun.sh/) API with an optional Redis cache.
+Minimal [ElysiaJS](https://elysiajs.com/) + [Bun](https://bun.sh/) API with async task processing, WebSocket updates, and an optional Redis cache.
 
 ## Requirements
 
@@ -51,6 +51,71 @@ curl -i http://localhost:3000/cached
 ```
 
 `/cached` is a small cache demo: the value is stored for 10 seconds, and the `x-cache` header shows whether it came from the cache.
+
+## Task processing
+
+All processing endpoints return `202 Accepted` immediately with a task ID:
+
+| Endpoint            | Body                    |
+| ------------------- | ----------------------- |
+| `POST /process/text`  | `{"text":"..."}`      |
+| `POST /process/image` | `{"url":"https://..."}` |
+| `POST /process/video` | `{"url":"https://..."}` |
+| `POST /process/url`   | `{"url":"https://..."}` |
+
+```bash
+curl -X POST http://localhost:3000/process/text \
+  -H 'content-type: application/json' \
+  -d '{"text":"Hello from a background task"}'
+# {"taskId":"...","status":"queued"}
+```
+
+```bash
+curl http://localhost:3000/tasks/<taskId>
+# {"id":"...","kind":"text","status":"completed","progress":100,...}
+```
+
+Tasks currently run in-process and are stored in memory for up to an hour after their last update. Restarting the server clears them; a durable queue (for example BullMQ + Redis) can be added later without changing the HTTP shape.
+
+## WebSocket updates
+
+Elysia has built-in WebSocket support through Bun. Connect to `ws://localhost:3000/ws` and subscribe with the task UUID:
+
+```json
+{"type":"subscribe","taskId":"<uuid>"}
+```
+
+The server sends:
+
+```json
+{"type":"connected"}
+{"type":"task.snapshot","task":{...}}
+{"type":"task.update","task":{...}}
+{"type":"error","message":"..."}
+```
+
+Minimal client:
+
+```js
+const response = await fetch("http://localhost:3000/process/text", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ text: "Hello" }),
+});
+const { taskId } = await response.json();
+
+const ws = new WebSocket("ws://localhost:3000/ws");
+ws.onopen = () => ws.send(JSON.stringify({ type: "subscribe", taskId }));
+ws.onmessage = (event) => {
+  const message = JSON.parse(event.data);
+  console.log(message);
+  if (message.type === "task.update" && message.task.status === "completed") {
+    ws.close();
+  }
+};
+```
+
+Statuses move from `queued` to `running` (with `progress` and `step`) to `completed` or `failed`. To stop listening, send `{"type":"unsubscribe","taskId":"<uuid>"}`.
 
 ## Cache
 
