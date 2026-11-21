@@ -1,4 +1,4 @@
-import { Markdown } from "./jina";
+import { Markdown } from "./utils";
 import { OpenRouterWrapper } from "./openrouter";
 import { ProcessImageSchema, ProcessTextSchema, ProcessURLSchema, ProcessVideoSchema } from "./schemas";
 import type { DecisionsNoulQuestion } from "@openrouter/sdk/models";
