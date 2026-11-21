@@ -3,7 +3,7 @@ export async function Markdown(url: string) {
         signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) {
-        throw new Error(`Jina AI could not retrieve the URL (HTTP ${response.status}).`);
+        throw new Error(`Jina AI nie mogła pobrać strony (HTTP ${response.status}).`);
     }
 
     return response.text();

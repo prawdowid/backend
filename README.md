@@ -32,8 +32,16 @@ Markdown using Jina AI, then runs the same flow.
 Google Fact Check Tools supplies published fact-check reviews. Jina Search
 searches Bing for material from a hard-coded list of curated source URLs and
 returns results only from their domains. The runtime does not depend on
-`zaufane_linki.txt` being present. A source excerpt is a lead for review, not a
-verdict; a domain on the curated list does not determine whether a claim is
+`zaufane_linki.txt` being present. Jina Search is requested without page
+content (`X-Respond-With: no-content`), so each source carries only a short,
+cleaned snippet. DeepSeek then assesses each claim using only the retrieved
+reviews and snippets and returns `verdict` (`supported`, `contradicted` or
+`unclear`), a short Polish `summary` that answers the claim's yes/no `question`
+(e.g. "Czy szczepionki powodują autyzm?" -> "Nie. ..."), and only the sources it
+relied on. The
+verdict is an automated assessment of the evidence found, not an independent
+fact-check; if there is no evidence or the assessment fails, the verdict is
+`unclear`. A domain on the curated list does not determine whether a claim is
 true. A missing Google review or search result does not mean that a claim is
 true or false. Responses report which providers were used and any provider
 errors; one provider can still supply results when the other is unavailable.
@@ -60,6 +68,13 @@ The cache is bounded to 200 claims with evidence and is lost when the process
 restarts. Image and video processing are not implemented and return HTTP 501.
 
 A URL submitted to `/process/url` is read through Jina Reader.
+
+User-facing response text (`message`, `statusMessage`, `providerMessages`,
+`providerErrors`, and `error`) is in Polish. Keep the existing `status` and
+provider-status values as machine-readable codes; use the corresponding Polish
+message fields for display. Claim text, publisher names, review ratings,
+titles, and source excerpts are returned as provided by the original source and
+are not automatically translated.
 
 ## Discord bot API
 

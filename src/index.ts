@@ -8,7 +8,27 @@ const port = Number(process.env.PORT ?? 3000);
 
 const app = new Elysia()
   .use(swagger({ path: "/docs" }))
-  .get("/", () => ({ message: "Hello World" }))
+  .onError(({ code, error, set }) => {
+    if (code === "VALIDATION") {
+      set.status = 422;
+      return { ok: false, error: "Dane żądania są nieprawidłowe." };
+    }
+
+    if (code === "PARSE") {
+      set.status = 400;
+      return { ok: false, error: "Nie udało się odczytać danych żądania." };
+    }
+
+    if (code === "NOT_FOUND") {
+      set.status = 404;
+      return { ok: false, error: "Nie znaleziono żądanego adresu API." };
+    }
+
+    console.error("Nieobsłużony błąd API:", error);
+    set.status = 500;
+    return { ok: false, error: "Wystąpił nieoczekiwany błąd serwera." };
+  })
+  .get("/", () => ({ message: "Serwer działa." }))
   .group("/process", (app) => {
     return app
       .post("/url", processUrl, {body: ProcessURLSchema}) 

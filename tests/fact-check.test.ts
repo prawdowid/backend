@@ -66,7 +66,9 @@ describe("researchFact", () => {
                 const result = await researchFact("A harmless test claim");
 
                 expect(result.status).toBe("sources_found");
+                expect(result.statusMessage).toBe("Znaleziono źródła pomocnicze, ale nie opublikowaną weryfikację.");
                 expect(result.providers.googleFactCheck).toBe("not_configured");
+                expect(result.providerMessages.googleFactCheck).toBe("Dostawca nie został skonfigurowany.");
                 expect(result.providers.jinaSearch).toBe("available");
                 const governmentSource = result.sources.find((source) => source.url.includes("gov.pl"));
                 expect(governmentSource).toBeDefined();
@@ -117,6 +119,7 @@ describe("researchFact", () => {
                 const result = await researchFact("A reviewed claim");
 
                 expect(result.status).toBe("review_found");
+                expect(result.statusMessage).toBe("Znaleziono opublikowane weryfikacje dotyczące tego twierdzenia.");
                 expect(result.reviews[0]?.textualRating).toBe("False");
                 expect(result.sources.some((source) => source.url.includes("gov.pl"))).toBe(true);
                 expect(result.providers.googleFactCheck).toBe("available");
@@ -144,7 +147,7 @@ describe("researchFact", () => {
 
                 expect(result.providers.googleFactCheck).toBe("available");
                 expect(result.providers.jinaSearch).toBe("unavailable");
-                expect(result.providerErrors).toContain("Jina Search request failed (HTTP 401).");
+                expect(result.providerErrors).toContain("Żądanie Jina Search nie powiodło się (HTTP 401).");
             } finally {
                 fetchSpy.mockRestore();
             }
@@ -157,7 +160,7 @@ describe("researchFact", () => {
             JINA_API_KEY: undefined,
         }, async () => {
             await expect(researchFact("A test claim")).rejects.toThrow(
-                "No research provider is configured.",
+                "Nie skonfigurowano żadnego dostawcy wyszukiwania.",
             );
         });
     });

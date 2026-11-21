@@ -24,11 +24,16 @@ export type ProviderStatus = "available" | "not_configured" | "unavailable";
 export type FactCheckResult = {
     claim: string;
     status: "review_found" | "sources_found" | "no_evidence_found";
+    statusMessage: string;
     reviews: FactCheckReview[];
     sources: TrustedSource[];
     providers: {
         googleFactCheck: ProviderStatus;
         jinaSearch: ProviderStatus;
+    };
+    providerMessages: {
+        googleFactCheck: string;
+        jinaSearch: string;
     };
     providerErrors: string[];
     checkedAt: string;
@@ -188,6 +193,26 @@ function isTrustedUrl(value: string, domains: string[]): URL | undefined {
     return url;
 }
 
+const MAX_EXCERPT_LENGTH = 300;
+
+export function cleanExcerpt(text: string): string {
+    const plain = text
+        .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+        .replace(/https?:\/\/\S+/g, " ")
+        .replace(/^\s*(?:#{1,6}|[*+-]|\d+\.)\s+/gm, "")
+        .replace(/[*_`>|]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    if (plain.length <= MAX_EXCERPT_LENGTH) {
+        return plain;
+    }
+
+    const cut = plain.slice(0, MAX_EXCERPT_LENGTH);
+    const lastSpace = cut.lastIndexOf(" ");
+    return `${(lastSpace > MAX_EXCERPT_LENGTH / 2 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
+}
+
 function parseJinaSources(value: unknown, domains: string[]): TrustedSource[] {
     if (!isRecord(value) || !Array.isArray(value.data)) {
         throw new Error("Invalid Jina Search response");
@@ -222,13 +247,15 @@ function parseJinaSources(value: unknown, domains: string[]): TrustedSource[] {
         seenUrls.add(url.href);
 
         const title = optionalString(item, "title");
-        const content = optionalString(item, "content") ?? optionalString(item, "description");
+        const snippet = cleanExcerpt(
+            optionalString(item, "description") ?? optionalString(item, "content") ?? "",
+        );
         sources.push({
             title: title?.trim() || url.hostname,
             url: url.href,
             domain: url.hostname,
             trusted,
-            ...(content ? { excerpt: content.slice(0, 1_000) } : {}),
+            ...(snippet ? { excerpt: snippet } : {}),
         });
     }
 
@@ -249,13 +276,13 @@ async function searchGoogleFactChecks(claim: string): Promise<ProviderCall<FactC
             { signal: AbortSignal.timeout(10_000) },
         );
     } catch {
-        return { status: "unavailable", error: "Google Fact Check API could not be reached." };
+        return { status: "unavailable", error: "Nie udało się połączyć z Google Fact Check API." };
     }
 
     if (!response.ok) {
         return {
             status: "unavailable",
-            error: `Google Fact Check API request failed (HTTP ${response.status}).`,
+            error: `Żądanie Google Fact Check API nie powiodło się (HTTP ${response.status}).`,
         };
     }
 
@@ -263,7 +290,7 @@ async function searchGoogleFactChecks(claim: string): Promise<ProviderCall<FactC
     try {
         payload = parseGoogleResponse(await response.json());
     } catch {
-        return { status: "unavailable", error: "Google Fact Check API returned an invalid response." };
+        return { status: "unavailable", error: "Google Fact Check API zwróciło nieprawidłową odpowiedź." };
     }
 
     const reviews = (payload.claims ?? []).flatMap((match) =>
@@ -296,17 +323,18 @@ async function searchJinaSources(claim: string): Promise<ProviderCall<JinaSearch
             headers: {
                 Authorization: `Bearer ${apiKey}`,
                 Accept: "application/json",
+                "X-Respond-With": "no-content",
             },
             signal: AbortSignal.timeout(30_000),
         });
     } catch {
-        return { status: "unavailable", error: "Jina Search could not be reached." };
+        return { status: "unavailable", error: "Nie udało się połączyć z Jina Search." };
     }
 
     if (!response.ok) {
         return {
             status: "unavailable",
-            error: `Jina Search request failed (HTTP ${response.status}).`,
+            error: `Żądanie Jina Search nie powiodło się (HTTP ${response.status}).`,
         };
     }
 
@@ -314,7 +342,7 @@ async function searchJinaSources(claim: string): Promise<ProviderCall<JinaSearch
     try {
         sources = parseJinaSources(await response.json(), domains);
     } catch {
-        return { status: "unavailable", error: "Jina Search returned an invalid response." };
+        return { status: "unavailable", error: "Jina Search zwróciła nieprawidłową odpowiedź." };
     }
 
     return {
@@ -330,6 +358,17 @@ export class FactCheckUnavailableError extends Error {
     }
 }
 
+function getProviderMessage(status: ProviderStatus): string {
+    switch (status) {
+        case "available":
+            return "Dostawca odpowiedział poprawnie.";
+        case "not_configured":
+            return "Dostawca nie został skonfigurowany.";
+        case "unavailable":
+            return "Dostawca jest niedostępny.";
+    }
+}
+
 export async function researchFact(claim: string): Promise<FactCheckResult> {
     const [google, jinaSearch] = await Promise.all([
         searchGoogleFactChecks(claim),
@@ -338,7 +377,7 @@ export async function researchFact(claim: string): Promise<FactCheckResult> {
 
     if (google.status === "not_configured" && jinaSearch.status === "not_configured") {
         throw new FactCheckUnavailableError(
-            "No research provider is configured. Set GOOGLE_FACT_CHECK_API_KEY and/or JINA_API_KEY.",
+            "Nie skonfigurowano żadnego dostawcy wyszukiwania. Skonfiguruj co najmniej jednego: GOOGLE_FACT_CHECK_API_KEY lub JINA_API_KEY.",
         );
     }
 
@@ -352,18 +391,29 @@ export async function researchFact(claim: string): Promise<FactCheckResult> {
     const sources = jinaSearch.status === "available" ? jinaSearch.value.sources : [];
     const providerErrors = [google, jinaSearch]
         .flatMap((provider) => provider.status === "unavailable" ? [provider.error] : []);
+    const status = reviews.length > 0
+        ? "review_found"
+        : sources.length > 0
+            ? "sources_found"
+            : "no_evidence_found";
+    const statusMessage = status === "review_found"
+        ? "Znaleziono opublikowane weryfikacje dotyczące tego twierdzenia."
+        : status === "sources_found"
+            ? "Znaleziono źródła pomocnicze, ale nie opublikowaną weryfikację."
+            : "Nie znaleziono opublikowanych weryfikacji ani pasujących źródeł.";
     return {
         claim,
-        status: reviews.length > 0
-            ? "review_found"
-            : sources.length > 0
-                ? "sources_found"
-                : "no_evidence_found",
+        status,
+        statusMessage,
         reviews,
         sources,
         providers: {
             googleFactCheck: google.status,
             jinaSearch: jinaSearch.status,
+        },
+        providerMessages: {
+            googleFactCheck: getProviderMessage(google.status),
+            jinaSearch: getProviderMessage(jinaSearch.status),
         },
         providerErrors,
         checkedAt: new Date().toISOString(),
