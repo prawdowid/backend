@@ -1,7 +1,7 @@
 import { Markdown } from "./utils";
 import { OpenRouterWrapper } from "./openrouter";
 import { ProcessImageSchema, ProcessTextSchema, ProcessURLSchema, ProcessVideoSchema } from "./schemas";
-import type { DecisionsNoulQuestion } from "@openrouter/sdk/models";
+import { containsStatementsQuestion } from "./questions";
 
 type ProcessURLBody = typeof ProcessURLSchema.static
 type ProcessTextBody = typeof ProcessTextSchema.static
@@ -13,15 +13,6 @@ export async function processUrl({ body }: { body: ProcessURLBody }) {
     const markdown = await Markdown(url);
     // TODO: moze wsparcie dla instagram / facebook
     return processText({ body: {text: markdown} })
-}
-
-const containsStatementsQuestion: DecisionsNoulQuestion = {
-    type: "noul", 
-    instructions: "Does this text have anything that could be classified political/propaganda statements?", // TODDO: lepszy prompt
-    criteria: {
-        true: "Yes it does",
-        false: "No it doesn't",
-    },
 }
 
 export async function processText({ body }: { body: ProcessTextBody }) {
