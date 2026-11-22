@@ -12,6 +12,7 @@ export async function Markdown(url: string): Promise<string> {
             accept: "text/plain",
             "x-return-format": "markdown",
         },
+        signal: AbortSignal.timeout(7000),
     });
 
     if (!response.ok) {
@@ -32,9 +33,8 @@ export async function ReadableText(url: string): Promise<string> {
 }
 
 async function fetchReadableText(url: string): Promise<string> {
+    // Direct HTML fetch first: no paid Jina quota for ordinary news pages.
     try {
-        return await Markdown(url);
-    } catch {
         const response = await fetchWithProxy(url, {
             headers: {
                 "user-agent":
@@ -50,7 +50,7 @@ async function fetchReadableText(url: string): Promise<string> {
         }
 
         const html = await response.text();
-        return html
+        const text = html
             .replace(/<script[\s\S]*?<\/script>/gi, " ")
             .replace(/<style[\s\S]*?<\/style>/gi, " ")
             .replace(/<\/(p|div|h[1-6]|li|tr|section|article|blockquote)>/gi, "\n")
@@ -64,6 +64,12 @@ async function fetchReadableText(url: string): Promise<string> {
             .replace(/\n{3,}/g, "\n\n")
             .trim()
             .slice(0, 100_000);
+
+        // JS-heavy pages return only navigation; let Jina try those.
+        if (text.length >= 500) return text;
+        throw new Error("Strona zwróciła zbyt mało tekstu.");
+    } catch {
+        return await Markdown(url);
     }
 }
 

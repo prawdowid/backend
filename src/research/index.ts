@@ -19,6 +19,7 @@ import { searchDisinfoCases } from "./euvsdisinfo";
 import { searchWeb } from "./search";
 import { wikidataEvidence } from "./wikidata";
 import { commonFactEvidence, currencyEvidence, electionRoundEvidence } from "./facts";
+import { discoverNews } from "./news-discovery";
 import { searchCorpusDocuments } from "./corpus-docs";
 import { fetchWithProxy } from "../modules/proxy";
 import type {
@@ -177,6 +178,21 @@ function matchingSentence(content: string, claim: ClaimInput): string | null {
         if (mentions(normalized, subject) === 0) continue;
         if (mentions(normalized, object) < needed) continue;
         return sentence;
+    }
+
+    // News often splits one proposition: "Tusk said ..." in one sentence,
+    // the quoted content in the next. Allow a two-sentence window, still
+    // scoped enough to avoid matching a whole page.
+    for (let i = 0; i + 1 < sentences.length; i++) {
+        const first = sentences[i]?.trim() ?? "";
+        const second = sentences[i + 1]?.trim() ?? "";
+        if (first.length < 20 || second.length < 20) continue;
+        const window = `${first} ${second}`;
+        if (window.length > 900) continue;
+        const normalized = normalizeText(window);
+        if (mentions(normalized, subject) === 0) continue;
+        if (mentions(normalized, object) < needed) continue;
+        return window;
     }
 
     return null;
@@ -1028,6 +1044,80 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
         }
     }
 
+    // --- a2) free news discovery (Bing News RSS) -------------------------
+    // RSS only proposes candidates; evidence is the fetched article with a
+    // quoted sentence that passed the Jev gate.
+    if (!ctx.offline && Date.now() < ctx.deadline) {
+        try {
+            const candidates = await discoverNews(claim, 6);
+            if (process.env["PIPELINE_DEBUG"] === "1") {
+                console.log(`[news] candidates=${candidates.length}`, candidates.map(c => c.publisher));
+            }
+            const seenPublishers = new Set(
+                evidence
+                    .filter((item) => item.relation !== "context")
+                    .map((item) => item.publisher.toLowerCase()),
+            );
+            const top = candidates
+                .filter((candidate) => !seenPublishers.has(candidate.publisher.toLowerCase()))
+                .slice(0, 3);
+
+            // Fetch candidates in parallel and put one Jev call on all matches.
+            const fetched = await Promise.allSettled(
+                top.map(async (candidate) => ({
+                    candidate,
+                    text: await ReadableText(candidate.url),
+                })),
+            );
+            if (process.env["PIPELINE_DEBUG"] === "1") {
+                console.log(
+                    `[news] fetched=${fetched.filter((r) => r.status === "fulfilled").length}/${top.length}`,
+                );
+            }
+            const matches: Array<{ candidate: (typeof top)[number]; match: string }> = [];
+            for (const result of fetched) {
+                if (result.status !== "fulfilled") continue;
+                const match = matchingSentence(result.value.text, claim);
+                if (match) matches.push({ candidate: result.value.candidate, match });
+            }
+
+            const relations =
+                matches.length > 0
+                    ? await classifySentences(
+                          claim.text,
+                          matches.map((entry) => entry.match),
+                      )
+                    : [];
+
+            for (let index = 0; index < matches.length; index++) {
+                const relation = relations[index];
+                if (!relation) continue;
+                const { candidate, match } = matches[index]!;
+                const key = candidate.url.toLowerCase();
+                if (seenUrls.has(key)) continue;
+                seenUrls.add(key);
+                seenPublishers.add(candidate.publisher.toLowerCase());
+
+                evidence.push({
+                    title: candidate.title.slice(0, 300),
+                    publisher: candidate.publisher,
+                    publishedAt: candidate.publishedAt,
+                    retrievedAt,
+                    url: candidate.url,
+                    excerpt: match.slice(0, 400),
+                    type: "secondary",
+                    relation,
+                });
+            }
+
+            if (matches.length > 0) {
+                limitations.push("Użyto wyszukiwania Bing News RSS (tylko jako indeks).");
+            }
+        } catch {
+            limitations.push("Wyszukiwanie newsów było niedostępne.");
+        }
+    }
+
     // --- b) Google Fact Check ---------------------------------------------
     let googleUsed = false;
     const reviewVerdicts: Verdict[] = [];
@@ -1313,7 +1403,14 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
     const supports = evidence.filter((item) => item.relation === "supports");
     const refutes = evidence.filter((item) => item.relation === "refutes");
 
-    const supportHosts = new Set(supports.map((item) => hostOf(item.url)));
+    // Google News links are redirects; use the publisher name for independence.
+    const supportHosts = new Set(
+        supports.map((item) =>
+            /news\.google\.com/i.test(item.url)
+                ? item.publisher.toLowerCase()
+                : hostOf(item.url),
+        ),
+    );
     const hasPrimarySupport = supports.some((item) => item.type === "primary");
 
     // Conflicting reviews: keep the strictest, but say so.

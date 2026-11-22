@@ -3,7 +3,19 @@ node_modules
 .gitignore
 .env
 .env.*
+!.env.example
 *.log
+
+# Stan runtime i dane lokalne: nigdy nie trafiają do obrazu.
+# data/ jest bind mountem w docker-compose.yml (poza .git, więc build
+# ze świeżego klona i tak by go nie znalazł).
+data
+eval
+docs
+scripts
+sql
+
 README.md
 Dockerfile
 .dockerignore
+docker-compose.yml

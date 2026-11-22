@@ -1,0 +1,76 @@
+name: prawdowid
+
+# Uruchomienie: skopiuj backend/.env.example -> backend/.env, uzupełnij klucze,
+# potem w tym katalogu: docker compose up --build
+#
+# Frontend (http://localhost:3001) woła własne /api/analyze, a Next.js
+# pośredniczy do backendu po sieci compose (http://backend:3000). Dzięki temu
+# przeglądarka nie potrzebuje CORS ani adresu backendu.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Sekrety tylko z .env — plik nie jest kopiowany do obrazu.
+    env_file:
+      - .env
+    environment:
+      # Musi zgadzać się z mapowaniem portów poniżej.
+      PORT: "3000"
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    volumes:
+      # Stan zapisywany przez backend: cache, logi, sprawy, metryki, alerty.
+      # Na Windows Docker Desktop zapis działa bez dodatkowej konfiguracji.
+      # Na Linuksie katalog hosta musi być zapisywalny dla uid 1000 (użytkownik bun).
+      - ./data:/app/data
+      # Korpus jest tylko do odczytu.
+      - ./corpus:/app/corpus:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        # Wbudowywane w build. Wartość względna jest poprawna: przeglądarka
+        # woła /api/analyze na tym samym originie (port 3001).
+        NEXT_PUBLIC_ANALYSIS_API_URL: ${NEXT_PUBLIC_ANALYSIS_API_URL:-/api/analyze}
+    environment:
+      PORT: "3001"
+      NODE_ENV: production
+      # Adres używany wyłącznie po stronie serwera (SSR / route handler).
+      BACKEND_API_URL: http://backend:3000
+      NEXT_PUBLIC_ANALYSIS_API_URL: ${NEXT_PUBLIC_ANALYSIS_API_URL:-/api/analyze}
+    ports:
+      - "3001:3001"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
