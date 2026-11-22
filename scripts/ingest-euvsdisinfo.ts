@@ -12,7 +12,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ENDPOINT = process.env["EUVD_MCP_URL"] ?? "https://euvsdisinfo-mcp-server.vercel.app/mcp";
+const ENDPOINT = process.env["EUVD_MCP_URL"] ?? "https://mcp.euvsd.info/mcp";
 const TOKEN = process.env["EUVD_TOKEN"] ?? process.env["EUVD_MCP_TOKEN"] ?? "";
 const MAX_TOTAL = 19_248;
 const DEFAULT_LIMIT = 2000;
