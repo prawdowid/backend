@@ -367,11 +367,9 @@ function wikiGate(): Promise<void> {
 }
 
 async function wikipediaViaJina(url: string): Promise<string> {
-    const key = process.env["JINA_API_KEY"];
     const response = await fetch(`https://r.jina.ai/${url}`, {
         headers: {
             accept: "text/plain",
-            ...(key ? { authorization: `Bearer ${key}` } : {}),
         },
         signal: AbortSignal.timeout(20_000),
     });

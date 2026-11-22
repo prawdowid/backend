@@ -2,14 +2,12 @@ const JINA_READER_URL = "https://r.jina.ai/";
 
 /** Renders a web page as Markdown via Jina Reader. */
 export async function Markdown(url: string): Promise<string> {
-    const apiKey = process.env["JINA_API_KEY"];
     const baseUrl = process.env["JINA_READER_URL"] ?? JINA_READER_URL;
 
     const response = await fetch(baseUrl + url, {
         headers: {
             accept: "text/plain",
             "x-return-format": "markdown",
-            ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
         },
     });
 
