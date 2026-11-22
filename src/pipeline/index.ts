@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { OpenRouterWrapper, cosineSimilarity } from "../modules/openrouter";
+import { DeepSeekWrapper, cosineSimilarity } from "../modules/deepseek";
 import { createStatementCacheQuestions, type StatementCandidate } from "../modules/questions";
 import type { CostBreakdown } from "./types";
-import type { DecisionsChoiceQuestion, DecisionsNoulQuestion } from "@openrouter/sdk/models";
+import type { DecisionsChoiceQuestion, DecisionsNoulQuestion } from "../modules/decisions";
 
 export type Verdict = "true" | "false" | "mixed" | "unverified";
 
@@ -21,7 +21,7 @@ export type Claim = {
     id: string;
     /** Exact-match key for repeat claims. */
     key: string;
-    /** Canonical sentence used for embeddings and Jev matching. */
+    /** Canonical sentence used for embeddings and DeepSeek matching. */
     text: string;
     /** Verbatim quote the claim came from. */
     quote: string;
@@ -35,6 +35,8 @@ export type CachedClaim = StatementCandidate & {
     verdict: Verdict;
     sources: string[];
     checkedAt: string;
+    /** Calibrated confidence stored with the verdict. Older caches omit it. */
+    confidence?: number;
     embedding: number[];
     /** First date on which this verdict holds; null = open-ended. */
     validFrom?: string | null;
@@ -82,11 +84,11 @@ export type PipelineResult = {
 const MATCH_THRESHOLD = 0.8;
 const SHORTLIST_SIZE = 10;
 
-/** Extraction model list prices, USD per 1M tokens (OpenRouter, 2026-11). */
-const EXTRACT_IN_USD_PER_M = 0.05;
-const EXTRACT_OUT_USD_PER_M = 0.199;
-/** Embedding list price, USD per 1M tokens. */
-const EMBED_USD_PER_M = 0.01;
+/** DeepSeek Flash list prices, USD per 1M tokens (off-peak, 2026-11). */
+const EXTRACT_IN_USD_PER_M = 0.15;
+const EXTRACT_OUT_USD_PER_M = 0.6;
+/** Local hashed embeddings are free. */
+const EMBED_USD_PER_M = 0;
 
 const DEBUG = process.env["PIPELINE_DEBUG"] === "1";
 
@@ -134,6 +136,7 @@ RULES
 7. Canonical entity names in "s"/"o"; spelling variants are the same entity.
 RELEVANCE GATE - run this before emitting any claim:
 Ask: if this claim were false, would the story change or would a reader be misled? If no - drop it.
+If the input is one sentence or a short question, do NOT drop it as "encyclopedic background": emit it as a claim anyway.
 
 KEEP: who did what, where, when, how many, casualties, official statements,
 numbers and dates, surprising or disputed details, named attributions.
@@ -146,6 +149,9 @@ Never drop: locations, dates, counts, who did what, quoted statements, contradic
 9. Omit every null/empty field. No ids, no type fields, no aliases, no entity list.
 10. "tr" only when the quote is not Polish.
 11. Predicates: short English snake_case; reuse the same word for the same relation.
+12. NEVER use "tak", "nie", "true", "false", "yes", "no" as "o". For a state or adjective claim, use p="status" and put the state in "o":
+    "Most Krymski został zniszczony." -> {"s":"Most Krymski","p":"status","o":"zniszczony"}
+    "Nawrocki jest prezydentem." -> {"s":"Karol Nawrocki","p":"status","o":"prezydent"}
 
 EXAMPLE
 {"lang":"pl","date":"2026-11-21","facts":[
@@ -154,6 +160,12 @@ EXAMPLE
    {"s":"dron","p":"count","o":1}]}]}
 
 CHECK BEFORE REPLYING: every "q" is an exact substring; every claim has s/p/o; no nulls; valid JSON; only the three top-level keys.`;
+
+const FALLBACK_PROMPT = `${MASTERPROMPT}
+
+FALLBACK MODE: the input is one short statement or question. You MUST return at least one claim.
+Do not apply the relevance gate, do not return an empty "facts" array, and do not answer the question.
+Keep "q" as an exact substring of the input.`;
 
 type RawFact = {
     q: string;
@@ -185,8 +197,81 @@ function claimKey(fact: ClaimFact): string {
         .digest("hex");
 }
 
+const PREDICATE_PL: Record<string, string> = {
+    status: "jest",
+    is: "jest",
+    was: "był",
+    has: "ma",
+    is_capital_of: "jest stolicą",
+    capital_of: "jest stolicą",
+    joined: "przystąpiła do",
+    membership: "należy do",
+    borders: "graniczy z",
+    resigned_from_position: "zrezygnował z funkcji",
+    regained_independence: "odzyskała niepodległość",
+    spending_on_transport: "wydatki na transport",
+    destroyed: "zniszczony",
+    count: "liczba",
+    won: "wygrał",
+    lost: "przegrał",
+    will_be: "będzie",
+    announced: "ogłosił",
+    signed: "podpisał",
+    attacked: "zaatakował",
+    killed: "zabił",
+    died: "zmarł",
+    arrested: "aresztował",
+    elected: "wybrany",
+    appointed: "mianowany",
+    introduced: "wprowadził",
+    increased: "wzrosła",
+    decreased: "spadła",
+    supports: "popiera",
+    opposes: "sprzeciwia się",
+    visited: "odwiedził",
+    met: "spotkał się z",
+    said: "powiedział",
+    reported: "poinformował",
+    plans: "planuje",
+    approved: "zatwierdził",
+    rejected: "odrzucił",
+    is_member_of: "należy do",
+    member_of: "należy do",
+    belongs_to: "należy do",
+    nato_membership: "członkostwo w NATO",
+    eu_membership: "członkostwo w UE",
+    accession: "przystąpienie do",
+};
+
+function predicateInPolish(predicate: string, object: unknown): string {
+    const key = predicate.trim().toLowerCase().replace(/\s+/g, "_");
+    const translated = PREDICATE_PL[key];
+    if (translated) return translated;
+
+    if (/nato/i.test(String(object))) return "należy do";
+    if (/unii europejskiej|\bue\b/i.test(String(object))) return "należy do";
+
+    // Keep Polish predicates from the model; do not leak an unknown English key.
+    if (/[ąćęłńóśźż]/i.test(predicate)) return predicate.replace(/_/g, " ");
+    return "dotyczy";
+}
+
 function claimText(fact: ClaimFact): string {
-    return `${fact.neg ? "NIE: " : ""}${fact.s} — ${fact.p.replace(/_/g, " ")} — ${fact.o}`;
+    const predicate = predicateInPolish(fact.p, fact.o);
+    const object = String(fact.o);
+    const date = fact.t?.trim();
+
+    // Extraction sometimes keeps a date in `t` instead of `o`. It must still be
+    // visible to the matcher, otherwise "2013" would be compared with "1918"
+    // as if the year did not exist.
+    const displayObject =
+        date && !object.includes(date)
+            ? predicate.toLowerCase().includes(object.toLowerCase())
+                ? date
+                : `${object} (${date})`
+            : object;
+
+    return `${fact.neg ? "NIE: " : ""}${fact.s} — ${predicate} — ${displayObject}`;
 }
 
 function claimDetails(fact: ClaimFact): string {
@@ -235,10 +320,11 @@ async function extractClaims(
     let completionTokens = 0;
 
     for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
-        const response = await OpenRouterWrapper.ChatDetailed(user, {
+        const response = await DeepSeekWrapper.ChatDetailed(user, {
             system: MASTERPROMPT,
             reasoning: false,
             maxTokens: 8000,
+            json: true,
         });
         promptTokens += response.promptTokens;
         completionTokens += response.completionTokens;
@@ -303,6 +389,28 @@ async function extractClaims(
 
     consume(parsed);
 
+    // Short, encyclopedic statements ("Warszawa jest stolicą Polski") are
+    // sometimes dropped by the relevance gate. For a single-sentence input,
+    // retry with explicit "must emit a claim" instructions.
+    if (claims.length === 0) {
+        try {
+            const retry = await DeepSeekWrapper.ChatDetailed(
+                `<ARTICLE>\n${safeText}\n</ARTICLE>`,
+                {
+                    system: FALLBACK_PROMPT,
+                    reasoning: false,
+                    maxTokens: 4000,
+                    json: true,
+                },
+            );
+            promptTokens += retry.promptTokens;
+            completionTokens += retry.completionTokens;
+            consume(JSON.parse(stripFence(retry.text)) as Summarize);
+        } catch {
+            // A failed fallback leaves the normal "no claims" response.
+        }
+    }
+
     // Compound sentence guard: if the text has conjunctions but extraction
     // merged them, re-extract each clause with the leading subject carried over.
     const clauses = safeText
@@ -315,9 +423,9 @@ async function extractClaims(
         for (const clause of clauses.slice(1)) {
             const clauseText = subject ? `${subject} ${clause}` : clause;
             try {
-                const extraResponse = await OpenRouterWrapper.ChatDetailed(
+                const extraResponse = await DeepSeekWrapper.ChatDetailed(
                     `<ARTICLE>\n${clauseText}\n</ARTICLE>`,
-                    { system: MASTERPROMPT, reasoning: false, maxTokens: 4000 },
+                    { system: MASTERPROMPT, reasoning: false, maxTokens: 4000, json: true },
                 );
                 promptTokens += extraResponse.promptTokens;
                 completionTokens += extraResponse.completionTokens;
@@ -359,14 +467,14 @@ export async function runPipeline(
     let stage = Date.now();
 
     // Stage 1: gate on the raw text.
-    const gate = await OpenRouterWrapper.Jev({ text }, {
+    const gate = await DeepSeekWrapper.Decide({ text }, {
         political: {
             type: "noul",
             instructions: "Does this text contain political or propaganda statements?",
         } satisfies DecisionsNoulQuestion,
     });
-    // Jev is billed per call; gate and statement matching are summed into jevUsd.
-    let jevUsd = gate.usage?.cost ?? 0;
+    // DeepSeek is billed per token; gate and statement matching are summed into matchUsd.
+    let matchUsd = gate.usage?.cost ?? 0;
     mark("gate", stage);
 
     const politicalAnswer = gate.answers["political"];
@@ -390,19 +498,19 @@ export async function runPipeline(
             hits: [],
             misses: [],
             injectionSuspected,
-            costUsd: extractionUsd + jevUsd,
-            costBreakdown: { extractionUsd, jevUsd, embeddingUsd: 0 },
+            costUsd: extractionUsd + matchUsd,
+            costBreakdown: { extractionUsd, matchUsd, embeddingUsd: 0 },
         };
     }
 
     // Stage 3: embed only incoming claims; cached vectors live in the store.
     stage = Date.now();
-    const vectors = await OpenRouterWrapper.Embed(claims.map((c) => c.text));
+    const vectors = await DeepSeekWrapper.Embed(claims.map((c) => c.text));
     // Stores with an index must not be loaded wholesale.
     const candidates = cache.search || cache.searchText ? [] : await cache.all();
     mark(`embed + cache.all (${candidates.length} cached)`, stage);
 
-    // Stage 4: exact key hit first, otherwise shortlist + one batched Jev request.
+    // Stage 4: exact key hit first, otherwise shortlist + one batched DeepSeek request.
     const hits: CacheHit[] = [];
     const misses: Claim[] = [];
     const questions: Record<string, DecisionsNoulQuestion | DecisionsChoiceQuestion> = {};
@@ -434,15 +542,15 @@ export async function runPipeline(
 
     if (Object.keys(questions).length > 0) {
         stage = Date.now();
-        const result = await OpenRouterWrapper.Jev(
+        const result = await DeepSeekWrapper.Decide(
             {
                 claims: claims.map((c) => ({ text: c.text, details: c.details })),
                 asOf,
             },
             questions,
         );
-        jevUsd += result.usage?.cost ?? 0;
-        mark(`jev match (${Object.keys(questions).length / 2} claims)`, stage);
+        matchUsd += result.usage?.cost ?? 0;
+        mark(`deepseek match (${Object.keys(questions).length / 2} claims)`, stage);
 
         for (const claim of claims) {
             if (hits.some((h) => h.claim.id === claim.id)) continue;
@@ -465,12 +573,11 @@ export async function runPipeline(
         }
     }
 
-    // Embeddings are the only estimated part (the endpoint is cheap and per-token
-    // usage is not surfaced through the current wrapper). Extraction is always
-    // paid for, cache hit or not — that is why warm runs never cost 0.
+    // Embeddings are local and free. Extraction is always paid for, cache hit
+    // or not — that is why warm runs never cost 0.
     const embedChars = claims.reduce((sum, claim) => sum + claim.text.length, 0);
     const embeddingUsd = ((embedChars / 3.5) * EMBED_USD_PER_M) / 1_000_000;
-    const costBreakdown: CostBreakdown = { extractionUsd, jevUsd, embeddingUsd };
+    const costBreakdown: CostBreakdown = { extractionUsd, matchUsd, embeddingUsd };
 
     return {
         status: misses.length > 0 ? "needs_research" : "done",
@@ -480,9 +587,9 @@ export async function runPipeline(
         claims,
         hits,
         misses,
-        costUsd: extractionUsd + jevUsd + embeddingUsd,
+        costUsd: extractionUsd + matchUsd + embeddingUsd,
         costBreakdown,
-        models: ["deepseek/deepseek-v4.1-flash", "typesafe/jev-1.14", "baai/bge-m3"],
+        models: ["deepseek-flash"],
         injectionSuspected,
     };
 }

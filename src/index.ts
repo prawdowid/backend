@@ -26,6 +26,10 @@ function corsHeaders(origin: string | null): Record<string, string> {
     };
 }
 
+if (!process.env["DEEPSEEK_API_KEY"]?.trim()) {
+    console.warn("Brak DEEPSEEK_API_KEY — /verify zwróci błąd techniczny, nie werdykt.");
+}
+
 const app = new Elysia()
     .onRequest(({ request, set }) => {
         const origin = request.headers.get("origin");

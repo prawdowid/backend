@@ -1,26 +1,41 @@
 # PRAWDOWID — backend
 
-Weryfikacja doniesień oparta na źródłach, nie na opinii modelu. System przyjmuje tekst lub URL,
-wyciąga sprawdzalne twierdzenia, szuka dowodów w korpusie źródeł i Google Fact Check Tools,
+Weryfikacja doniesień oparta na źródłach, nie na opinii modelu. System przyjmuje tekst, URL lub
+zdjęcie, wyciąga sprawdzalne twierdzenia, szuka dowodów w korpusie źródeł i innych źródłach,
 a gdy dowodów brakuje — **wstrzymuje się od rozstrzygnięcia**.
+
+Cała warstwa AI to **DeepSeek**. Wystarczy jeden klucz: `DEEPSEEK_API_KEY`.
 
 ## Uruchomienie
 
+### Windows
+
+Kliknij dwukrotnie `start.bat`. Skrypt użyje Bun z PATH albo lokalnego
+`node_modules\bun\bin\bun.exe`, zainstaluje zależności i uruchomi API na
+<http://localhost:3000>. Frontend uruchamiasz osobno przez `prawdowid\start.bat`
+(<http://localhost:3001>).
+
+### Ręcznie
+
 ```bash
 bun install
-cp .env.example .env   # uzupełnij klucze
+cp .env.example .env   # wpisz DEEPSEEK_API_KEY
 bun run dev            # http://localhost:3000
 ```
 
-Wymagane: `OPENROUTER_API_KEY`. Opcjonalne: `GOOGLE_FACT_CHECK_API_KEY` (dowody fact-checkingowe).
-Bez klucza Google system nadal działa, ale raportuje ograniczenie. Kanał Discord jest osobnym
-repozytorium i woła ten sam endpoint `POST /verify`.
+Jedyny wymagany klucz:
+
+```env
+DEEPSEEK_API_KEY=...
+```
+
+Opcjonalny jest tylko `MYSQL_URL`; bez niego cache działa na plikach JSON w `data/`.
 
 ## Endpointy
 
 | Metoda | Ścieżka | Opis |
 |---|---|---|
-| POST | `/verify` | `{ text?, url?, channel? }` → `VerifyResponse` |
+| POST | `/verify` | `{ text?, url?, image?, channel? }` → `VerifyResponse` |
 | GET | `/health` | status procesu |
 | GET | `/metrics` | liczniki, p50/p95, średni koszt |
 | GET | `/cases` | nierozstrzygnięte, pogrupowane pytania |
@@ -41,20 +56,30 @@ kanał (WWW / API / zewnętrzny bot Discord)
         ▼
    verifyInput()                 src/pipeline/verify.ts
         │
-        ├─ 1. gate Jev           political score (raportowany, nie blokuje)
-        ├─ 2. ekstrakcja         DeepSeek v4.1 Flash (OpenRouter, reasoning OFF)
-        │                        MASTERPROMPT → fakty → atomowe SPO
-        ├─ 3. embeddingi         bge-m3 (PL), shortlist cache
-        ├─ 4. cache              FileCacheStore / Redis (3 metody)
-        │                        exact key → Jev choice+noul → wpis
-        └─ 5. research           korpus 122 źródeł + Google Fact Check
-                                 → werdykt + dowody + siła
+        ├─ 1. gate                DeepSeek Flash (polityczność, raportowana)
+        ├─ 2. ekstrakcja          DeepSeek Flash → fakty → atomowe SPO
+        ├─ 3. embeddingi          lokalne wektory hashowe (bez modelu i klucza)
+        ├─ 4. cache               FileCacheStore / MySQL (3 metody)
+        └─ 5. research            korpus + Wikipedia/Wikidata/EUvsDisinfo
+                                  → werdykt + dowody + siła
         ▼
    VerifyResponse (werdykt, dowody, ograniczenia, koszt, czas)
 ```
 
-Kanały są cienkie: **WWW i zewnętrzny bot wołają dokładnie tę samą funkcję `verifyInput`**, więc wynik
-merytoryczny jest identyczny (wymóg spójności kanałów).
+### Warstwa AI
+
+| Funkcja | Model / mechanizm | Klucz |
+|---|---|---|
+| Ekstrakcja twierdzeń | `deepseek-flash` (`/chat/completions`, JSON mode) | `DEEPSEEK_API_KEY` |
+| Bramka i dopasowanie twierdzeń | `deepseek-flash` (JSON decyzje `noul`/`choice`) | `DEEPSEEK_API_KEY` |
+| Embeddingi do cache i wyszukiwania | lokalny deterministyczny hashing 1024D | brak |
+| OCR obrazów | `POST /v1/tools/ocr` | `DEEPSEEK_API_KEY` |
+| Wyszukiwanie dowodów w sieci | `POST /v1/tools/search` (wyniki z treścią) | `DEEPSEEK_API_KEY` |
+| ASR audio | `POST /v1/tools/asr` (moduł gotowy, niepodłączony do `/verify`) | `DEEPSEEK_API_KEY` |
+
+Nie ma już OpenRoutera, Jev, BGE-M3 ani zewnętrznego `DEEPSEEK_OCR_URL`.
+Embeddingi nie są modelem AI — służą tylko do zawężenia kandydatów, a końcową decyzję
+podejmuje DeepSeek.
 
 ### Werdykty
 
@@ -72,94 +97,55 @@ prawdziwa w danym oknie. Dzięki temu „Nawrocki wygrał wybory” przed ogłos
 
 ### Źródła
 
-`src/sources/manifest.ts`: **122 rekordy, 29 domen**, typy `primary` (92), `secondary` (22),
-`fact_check` (8) — m.in. Dziennik Ustaw, Monitor Polski, ISAP, PKW, GUS, NBP, EUR-Lex, Demagog,
-AFP Fact Check, EUvsDisinfo, EDMO, NASK.
+`src/sources/manifest.ts`: rekordy źródeł typu `primary`, `secondary`, `fact_check` — m.in.
+Dziennik Ustaw, Monitor Polski, ISAP, PKW, GUS, NBP, EUR-Lex, Demagog, AFP Fact Check,
+EUvsDisinfo, EDMO, NASK.
 
-Audyt linków:
+Research korzysta z:
 
-```bash
-bun run scripts/ingest-sources.ts   # zapisuje data/sources/audit.json
-```
+- lokalnego korpusu `corpus/corpus.jsonl` (dokumenty rządowe/publiczne),
+- polskiej Wikipedii i Wikidanych,
+- snapshotu EUvsDisinfo (`data/euvsdisinfo/cases.ndjson`, opcjonalny),
+- wyszukiwania internetowego DeepSeek (`/v1/tools/search`) dla bieżących doniesień,
+- opcjonalnego Google Fact Check Tools — **nie jest wymagane**; bez klucza jest pomijane,
+- opcjonalnej wyszukiwarki Brave/Tavily — **nie jest wymagana**.
 
-`searchSources()` embeduje manifest partiami po 32 i zwraca top-k po cosine. Wektory żyją w pamięci
-procesu; przy awarii embeddingów zwraca `[]` zamiast wywalać weryfikację.
-
-#### Baza przypadków EUvsDisinfo
-
-Serwer MCP EUvsDisinfo udostępnia tylko paginowane listy (`cases`, `articles`), bez wyszukiwania, więc
-pobieramy snapshot przypadków i przeszukujemy go lokalnie. Runtime czyta `data/euvsdisinfo/cases.ndjson`
-i **nie potrzebuje tokenu** — token służy wyłącznie do odświeżenia snapshotu. Dopasowanie jest tokenowe,
-a o tym, czy to naprawdę ta sama teza, decyduje bramka Jev (`noul ≥ 0,8`); bez niej przypadek nie staje
-się dowodem.
-
-```bash
-EUVD_TOKEN=... bun run scripts/ingest-euvsdisinfo.ts   # EUVD_LIMIT=5000 pobiera więcej
-```
-
-Licencje, format snapshotu i ograniczenia: `docs/SOURCES.md`.
-
-### Pętla informacji
-
-Nierozstrzygnięte twierdzenia (`insufficient_evidence`, `not_verifiable`) trafiają do
-`data/moderation/cases.json`. Nowe pytanie jest embedowane i dołączane do najbliższej otwartej
-sprawy (cosine ≥ 0.82), a identyczne pytanie trafia do sprawy bez dodatkowego kosztu.
-
-Przy 3. zgłoszeniu tej samej sprawy system raz wysyła alert:
-
-- zawsze zapisuje go do `data/alerts/alerts.jsonl`,
-- jeśli ustawisz `MODERATOR_WEBHOOK_URL`, robi `POST` z JSON-em i dopiero wtedy `escalated: true`,
-- bez webhooka sprawa zostaje `open` z jawnym `alertReason` „Rekomendacja przekazania…” —
-  system nie twierdzi, że przekazał sprawę, jeśli tego nie zrobił.
-
-`GET /cases` pokazuje `open`, `escalated` i `recommended` osobno; `POST /cases/:id/ack` zamyka sprawę.
+Sama obecność źródła nie przesądza werdyktu. DeepSeek musi potwierdzić, że zdanie
+faktycznie mówi to samo co twierdzenie.
 
 ### Skala i baza
 
-Domyślnie cache to pliki JSON w `data/` — wystarcza do kilkuset claimów. Po włączeniu
-`MYSQL_URL` backend używa `MySQLCacheStore`:
+Domyślnie cache to pliki JSON w `data/`. Po włączeniu `MYSQL_URL` backend używa
+`MySQLCacheStore`:
 
 ```bash
 mysql -u user -p prawdowid < sql/schema.sql
 # .env: MYSQL_URL=mysql://user:pass@host:3306/prawdowid
 ```
 
-- embeddingi leżą jako `BLOB` (`Float32Array`, 4 KB na 1024 wymiary), nie JSON,
-- `search()` przegląda ograniczone okno czasowe (domyślnie 2000 najnowszych wierszy)
-  i rerankuje w procesie — bez pełnego skanu tabeli,
-- przy >100k claimów trzeba podmienić okno na ANN (MySQL 9 `VECTOR`, Redis Stack),
-  kontrakt `CacheStore` się nie zmienia,
-- dokumenty źródłowe i dowody mają osobne tabele (`documents`, `evidence`) pod audyt i eksport.
-
-**Newsy trzymamy w MySQL, nie w Redisie.** Redis to warstwa ulotna: hot-cache werdyktów, locki
-`SET NX PX`, rate limit, kolejka rechecków (ZSET). Wyłączenie Redisa ma spowolnić system, nie zmienić
-wyniku. Zasady dla `documents`:
-
-- dokument to **niezmienna wersja**: `(source_id, content_hash)` unique, a ten sam `canonical_url`
-  z nową treścią to nowy wiersz (`fetched_at`), nie nadpisanie,
-- pełny tekst tylko dla dokumentów urzędowych/publicznych z jasną licencją,
-- dla newsów i mediów: `excerpt` (≤1500 znaków) + metadane + `content_hash` + link — bez
-  redystrybucji całego artykułu,
-- bez `FULLTEXT` na te 24h: `LIKE` po `title`/`excerpt` + embeddingi wystarczą; `FULLTEXT ... WITH PARSER ngram`
-  dopiero, gdy recall zacznie zawodzić (polska odmiana i diakrytyki).
+- embeddingi leżą jako `BLOB` (`Float32Array`, 4 KB na 1024 wymiary),
+- `search()` przegląda ograniczone okno czasowe i rerankuje w procesie,
+- dokumenty źródłowe i dowody mają osobne tabele (`documents`, `evidence`).
 
 ## Bezpieczeństwo
 
 - treść użytkownika jest **danymi** w `<ARTICLE>`; MASTERPROMPT zabrania wykonywania instrukcji z treści,
-- heurystyka `detectInjection()` oznacza próby wpływu i dopisuje ograniczenie do odpowiedzi (nie zmienia werdyktu),
+- heurystyka `detectInjection()` oznacza próby wpływu i dopisuje ograniczenie do odpowiedzi,
 - walidacja wejścia (rozmiar, `http/https`, JSON) i osobne komunikaty błędów,
 - brak sekretów w repo; `.env` w `.gitignore`,
 - cache i logi to pliki lokalne (`data/`), możliwe do usunięcia.
 
 ## Koszt (szacunek)
 
-Jedno sprawdzenie: ~$0.0003–$0.001 (gate + ekstrakcja + embeddingi; research z Google jest darmowy
-w ramach limitu). **1000 zapytań ≈ $0.3–$1.** Brak kosztu po stronie użytkownika.
+Jedno sprawdzenie to głównie tokeny DeepSeek Flash. Cennik off-peak w 2026-11:
+`$0.15 / 1M` wejścia i `$0.60 / 1M` wyjścia. Wyszukiwanie DeepSeek to
+`$0.75 / 1000` zapytań, OCR jest rozliczany za stronę, ASR za sekundę audio.
+Embeddingi są lokalne i darmowe.
 
 ## Testy
 
 ```bash
-node node_modules/typescript/bin/tsc --noEmit
+bun run typecheck
 bun run scripts/test-verify.ts        # empty / injection / real claim
 bun run scripts/test-pipeline.ts      # ekstrakcja + cache
 bun run scripts/test-pipeline-cache.ts
@@ -173,5 +159,6 @@ bun run scripts/test-pipeline-cache.ts
 - **aktualność**: wpisy mają okno ważności, ale recheck po stronie Redisa/schedulera nie jest jeszcze wpięty,
 - **prompt injection**: heurystyka + separacja danych; brak pełnego red-teamingu,
 - **prywatność**: logi zawierają treść zapytania — do produkcji potrzebna retencja i maskowanie,
-- **zależności**: OpenRouter, Jina, Google Fact Check; każda awaria kończy się statusem `error`, nie werdyktem,
+- **zależności**: DeepSeek API; awaria kończy się statusem `error`, nie werdyktem,
+- **multimodalność**: OCR obrazów działa przez DeepSeek; MP4/audio nie jest jeszcze podłączone do `/verify`,
 - **kanał Discord** jest utrzymywany w osobnym repozytorium i korzysta z `POST /verify`.

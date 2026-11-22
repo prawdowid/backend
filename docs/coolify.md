@@ -93,14 +93,11 @@ NODE_ENV=production
 # CORS: potrzebny tylko, gdy przeglądarka ma wołać backend bezpośrednio.
 CORS_ORIGINS=https://prawdowid.org,https://www.prawdowid.org
 
-# Model reasoning / ekstrakcja / embeddingi
-OPENROUTER_API_KEY=...
-OPENROUTER_RLCD_MODEL=typesafe/jev-latest
-OPENROUTER_EXTRACT_MODEL=deepseek/deepseek-v4.1-flash
-OPENROUTER_EMBEDDING_MODEL=baai/bge-m3
+# Jedyny wymagany klucz: DeepSeek (czat, dopasowanie, OCR, ASR, wyszukiwanie).
+DEEPSEEK_API_KEY=...
 
-# Opcjonalne: OpenAI-compatible, DeepSeek OCR/ASR, Google Fact Check,
-# Brave/Tavily, webhook moderatora, MYSQL_URL (bez niego stan leci do JSON-ów w data/)
+# Opcjonalne: CORS_ORIGINS, MYSQL_URL, webhook moderatora.
+# Bez MYSQL_URL stan leci do JSON-ów w data/.
 ```
 
 Nie ustawiaj `PORT` na coś innego niż `3000` — mapping portów w compose

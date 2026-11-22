@@ -13,7 +13,7 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { OpenRouterWrapper, cosineSimilarity } from "../modules/openrouter";
+import { DeepSeekWrapper, cosineSimilarity } from "../modules/deepseek";
 import type { ClaimVerdict } from "../pipeline/types";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -21,7 +21,8 @@ const DATA_DIR = resolve(HERE, "..", "..", "data");
 const CASES_FILE = resolve(DATA_DIR, "moderation", "cases.json");
 const ALERTS_FILE = resolve(DATA_DIR, "alerts", "alerts.jsonl");
 
-const SIMILARITY_THRESHOLD = 0.82;
+/** Local hashed embeddings: keep the cluster loose, exact duplicates are caught above. */
+const SIMILARITY_THRESHOLD = 0.35;
 const ALERT_AT_REPEATS = 3;
 const MAX_SAMPLES = 5;
 
@@ -88,7 +89,7 @@ function persist(store: Store): Promise<void> {
 
 async function embed(text: string): Promise<number[]> {
     try {
-        return await OpenRouterWrapper.Embed(text.slice(0, 4000));
+        return await DeepSeekWrapper.Embed(text.slice(0, 4000));
     } catch (error) {
         console.error("[moderation] embedding nieudany:", (error as Error).message);
         return [];

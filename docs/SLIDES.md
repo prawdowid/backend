@@ -9,7 +9,7 @@
 4. **Zasada** — pięć werdyktów i twarde „nie wiem”. Werdykt bez dowodu jest zakazany.
    Błąd techniczny ≠ werdykt.
 5. **Jak działa** — schemat: tekst/URL → claimy (SPO) → korpus + Google → werdykt + dowody.
-   Modele: DeepSeek Flash (ekstrakcja), bge-m3 (embeddingi), Jev (dopasowanie do cache).
+   Model: DeepSeek Flash (ekstrakcja, bramka, dopasowanie) + lokalne embeddingi hashowe.
 6. **Dowody** — tytuł, wydawca, data, link, fragment; siła z liczby niezależnych źródeł.
    Zrzut z odpowiedzi `/verify`.
 7. **Czas i cache** — okna `validFrom/validUntil`; przykład „Nawrocki wygrał wybory”

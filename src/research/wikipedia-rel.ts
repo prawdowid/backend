@@ -9,15 +9,15 @@
  *
  * This module asks Wikipedia about the RELATION instead. For
  * `Kraków — capital_of — Polska` it searches "stolica Polska" and reads the
- * sentence "Stolicą Polski jest Warszawa". Jev then decides who the sentence
+ * sentence "Stolicą Polski jest Warszawa". DeepSeek then decides who the sentence
  * binds the object to: the claim subject (supports) or a different subject /
  * different value / different date (refutes).
  *
  * Only `fact` (s/p/o/t/neg) is used; there are no new dependencies.
  */
 
-import type { DecisionsNoulQuestion } from "@openrouter/sdk/models";
-import { OpenRouterWrapper } from "../modules/openrouter";
+import type { DecisionsNoulQuestion } from "../modules/decisions";
+import { DeepSeekWrapper } from "../modules/deepseek";
 import type { ClaimInput } from "../pipeline/types";
 
 const WIKI_API = "https://pl.wikipedia.org/w/api.php";
@@ -360,7 +360,7 @@ function scoreTitle(title: string, claim: ClaimInput): number {
  * The sentence plus the previous line/sentence as context. Wikipedia extracts
  * drop the subject in later sentences ("W latach 2017–2023 prezes Rady
  * Ministrów…") and rely on section headings ("== Państwa poza strefą euro ==").
- * Jev needs that context to resolve who/what the sentence is about.
+ * DeepSeek needs that context to resolve who/what the sentence is about.
  */
 type Candidate = { sentence: string; context: string; article: string; url: string };
 
@@ -482,7 +482,7 @@ function pickCandidates(claim: ClaimInput, pages: Array<{ title: string; text: s
 }
 
 // ---------------------------------------------------------------------------
-// Jev: who does the sentence bind the object to?
+// DeepSeek: who does the sentence bind the object to?
 // ---------------------------------------------------------------------------
 
 type Binding = { relation: "supports" | "refutes" | null; confidence: number };
@@ -512,7 +512,7 @@ function bindingQuestion(claim: ClaimInput): string {
 
 /**
  * If the sentence gives a year range and the claim year falls just outside it,
- * say so explicitly. Jev is otherwise conservative about date arithmetic
+ * say so explicitly. DeepSeek is otherwise conservative about date arithmetic
  * ("2017–2023" vs a 2024 claim scored 0.57–0.60).
  */
 function dateRangeHint(sentence: string, date: string): string {
@@ -617,7 +617,7 @@ async function classifyBindings(claim: ClaimInput, candidates: Candidate[]): Pro
     });
 
     try {
-        const result = await OpenRouterWrapper.Jev(
+        const result = await DeepSeekWrapper.Decide(
             { claim: claim.text, subject, relation, predicate, object, date },
             questions,
         );
@@ -654,7 +654,7 @@ async function classifyBindings(claim: ClaimInput, candidates: Candidate[]): Pro
                 return { relation: "refutes", confidence: pOther };
             }
 
-            // Jev is conservative when a date/range needs inference ("2017–2023"
+            // DeepSeek is conservative when a date/range needs inference ("2017–2023"
             // vs a 2024 claim). Accept a clear, one-sided signal above 0.6, but
             // only when the other answer is far behind.
             if (!differentYear && pSame >= 0.6 && pSame >= pOther * 2 && pSame - pOther >= 0.35) {
@@ -679,7 +679,7 @@ async function classifyBindings(claim: ClaimInput, candidates: Candidate[]): Pro
  * pages, and decide whether the relation is bound to the claim's subject.
  *
  * Returns `null` when no usable sentence was found at all. When a sentence was
- * found but Jev could not classify it, `relation` is `null` (the sentence is
+ * found but DeepSeek could not classify it, `relation` is `null` (the sentence is
  * still returned for debugging / evidence as context).
  */
 export async function relationLookup(claim: ClaimInput): Promise<RelationLookupResult | null> {
@@ -732,7 +732,7 @@ export async function relationLookup(claim: ClaimInput): Promise<RelationLookupR
     }
     if (pages.length === 0) return null;
 
-    // 3) sentence candidates + one batched Jev call.
+    // 3) sentence candidates + one batched DeepSeek call.
     const candidates = pickCandidates(claim, pages);
     if (process.env["PIPELINE_DEBUG"] === "1") {
         console.log(`[wikipedia-rel] ${claim.id} queries=${JSON.stringify(queries)}`);

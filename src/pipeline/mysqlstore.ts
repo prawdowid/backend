@@ -1,5 +1,5 @@
 import { createPool, type Pool } from "mysql2/promise";
-import { cosineSimilarity } from "../modules/openrouter";
+import { cosineSimilarity } from "../modules/deepseek";
 import type { CacheStore, CachedClaim } from ".";
 
 /**

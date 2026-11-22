@@ -5,7 +5,7 @@ import { MySQLCacheStore } from "./mysqlstore";
 import { aggregateVerdicts } from "./aggregate";
 import { researchClaims } from "../research";
 import { DeepSeekOCRExtract, ReadableText } from "../modules/utils";
-import { OpenRouterWrapper } from "../modules/openrouter";
+import { DeepSeekWrapper } from "../modules/deepseek";
 import {
     DISCLAIMER_PL,
     type ClaimVerdict,
@@ -267,14 +267,23 @@ export async function verifyInput(
 
             imagePreview = imageText.slice(0, 200);
         } catch (error) {
-            console.error("[verify] OCR failure:", technicalReason(error));
+            const reason = technicalReason(error);
+            console.error("[verify] OCR failure:", reason);
+            const missingKey = reason.includes("DEEPSEEK_API_KEY is not set");
             return {
                 status: "error",
                 language: "pl",
                 input: { kind: "image", preview: "" },
-                summary: "Nie udało się odczytać obrazu. To nie jest werdykt.",
+                summary: missingKey
+                    ? "Backend nie ma skonfigurowanego klucza DeepSeek. To nie jest werdykt."
+                    : "Nie udało się odczytać obrazu. To nie jest werdykt.",
                 claims: [],
-                limitations: [IMAGE_LIMITATION, `Powód techniczny: ${technicalReason(error)}`],
+                limitations: [
+                    IMAGE_LIMITATION,
+                    missingKey
+                        ? "Ustaw DEEPSEEK_API_KEY w backend/.env i uruchom backend ponownie."
+                        : `Powód techniczny: ${reason}`,
+                ],
                 timingMs: Date.now() - started,
                 costUsd: 0,
                 models: [],
@@ -303,12 +312,29 @@ export async function verifyInput(
         for (const hit of pipeline.hits) {
             covered.add(hit.claim.id);
             const verdict = cacheVerdict(hit.cached.verdict);
+            const evidence = cachedEvidence(
+                hit.claim.text,
+                hit.cached.sources,
+                verdict,
+                hit.cached.checkedAt,
+            );
+            const hasStrongSource = evidence.some(
+                (item) => item.type === "primary" || item.type === "fact_check",
+            );
+            const confidence =
+                hit.cached.confidence ??
+                (verdict === "insufficient_evidence"
+                    ? 0.05
+                    : hasStrongSource
+                      ? 0.95
+                      : 0.8);
+
             claims.push({
                 id: hit.claim.id,
                 claim: hit.claim.text,
                 verdict,
-                confidence: Math.max(0, Math.min(1, hit.probability)),
-                strength: hit.probability >= 0.85 ? "high" : "medium",
+                confidence,
+                strength: confidence >= 0.9 ? "high" : confidence >= 0.6 ? "medium" : "low",
                 reasoning:
                     verdict === "confirmed"
                         ? "Twierdzenie jest zgodne z wpisem w bazie zweryfikowanych informacji."
@@ -317,7 +343,7 @@ export async function verifyInput(
                           : verdict === "misleading"
                             ? "Twierdzenie częściowo pokrywa się z wpisem w bazie; wymaga ostrożności."
                             : "Wpis w bazie nie rozstrzyga tego twierdzenia.",
-                evidence: cachedEvidence(hit.claim.text, hit.cached.sources, verdict, hit.cached.checkedAt),
+                evidence,
                 limitations: verdict === "insufficient_evidence" ? ["Wpis w bazie nie rozstrzyga twierdzenia."] : [],
                 asOf: pipeline.date ?? options.asOf ?? new Date().toISOString().slice(0, 10),
                 cached: true,
@@ -346,7 +372,7 @@ export async function verifyInput(
                 );
                 if (cacheable.length > 0) {
                     const checkedAt = new Date().toISOString();
-                    const vectors = await OpenRouterWrapper.Embed(cacheable.map((claim) => claim.claim));
+                    const vectors = await DeepSeekWrapper.Embed(cacheable.map((claim) => claim.claim));
 
                     for (let i = 0; i < cacheable.length; i++) {
                         const result = cacheable[i]!;
@@ -366,6 +392,7 @@ export async function verifyInput(
                             text: source.text,
                             details: source.details,
                             verdict: cacheVerdict,
+                            confidence: result.confidence,
                             sources: result.evidence.map((item) => item.url),
                             checkedAt,
                             embedding: vectors[i]!,
@@ -439,7 +466,7 @@ export async function verifyInput(
             costUsd: (pipeline.costUsd ?? 0) + researchUsd,
             costBreakdown: {
                 extractionUsd: pipeline.costBreakdown?.extractionUsd ?? 0,
-                jevUsd: pipeline.costBreakdown?.jevUsd ?? 0,
+                matchUsd: pipeline.costBreakdown?.matchUsd ?? 0,
                 embeddingUsd: pipeline.costBreakdown?.embeddingUsd ?? 0,
                 researchUsd,
             },
@@ -449,7 +476,10 @@ export async function verifyInput(
             disclaimer: DISCLAIMER_PL,
         };
     } catch (error) {
-        console.error("[verify] technical failure:", (error as Error).message);
+        const technicalMessage = (error as Error).message;
+        console.error("[verify] technical failure:", technicalMessage);
+        const missingKey = technicalMessage.includes("DEEPSEEK_API_KEY is not set");
+
         return {
             status: "error",
             language: "pl",
@@ -457,11 +487,15 @@ export async function verifyInput(
                 kind: inputKind,
                 preview: (hasImage ? imagePreview : targetUrl || text).slice(0, 200),
             },
-            summary: "Nie udało się wykonać sprawdzenia. To nie jest werdykt.",
+            summary: missingKey
+                ? "Backend nie ma skonfigurowanego klucza DeepSeek. To nie jest werdykt."
+                : "Nie udało się wykonać sprawdzenia. To nie jest werdykt.",
             claims: [],
             limitations: [
                 ...(hasImage ? [IMAGE_LIMITATION] : []),
-                "Błąd techniczny po stronie serwera. Spróbuj ponownie później.",
+                missingKey
+                    ? "Ustaw DEEPSEEK_API_KEY w backend/.env i uruchom backend ponownie."
+                    : "Błąd techniczny po stronie serwera. Spróbuj ponownie później.",
             ],
             timingMs: Date.now() - started,
             costUsd: 0,

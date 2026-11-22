@@ -46,9 +46,9 @@ z jawnym powodem.
 Koszt: ok. 0,0003–0,001 USD na sprawdzenie, czyli 0,3–1 USD za 1000 zapytań. Mediana odpowiedzi
 w testach: kilka sekund. System nie pobiera opłat od użytkownika.
 
-Ograniczenia: to prototyp. Korpus dowodowy jest ograniczony, jakość zależy od dostępności źródeł
-i klucza Google Fact Check, a werdykt nie jest opinią prawną. Pełna lista ryzyk i wyniki testów
-znajdują się w `docs/EVAL.md` i `README.md`.
+Ograniczenia: to prototyp. Korpus dowodowy jest ograniczony, a jakość zależy od dostępności
+źródeł. Werdykt nie jest opinią prawną. Pełna lista ryzyk i wyniki testów znajdują się
+w `docs/EVAL.md` i `README.md`.
 
 ## Architektura
 
@@ -57,10 +57,10 @@ WWW / API / bot Discord
         │
         ▼
    verifyInput()
-        ├─ gate + ekstrakcja claimów (SPO)      DeepSeek v4.1 Flash (OpenRouter)
-        ├─ embeddingi                            bge-m3
+        ├─ gate + ekstrakcja claimów (SPO)      DeepSeek Flash (DeepSeek API)
+        ├─ embeddingi                            lokalne wektory hashowe (bez modelu)
         ├─ cache z oknami czasu                  pliki JSON / MySQL
-        ├─ research                              korpus 135 źródeł + Google Fact Check
+        ├─ research                              korpus 135 źródeł + Wikipedia/Wikidata/EUvsDisinfo
         └─ pętla informacji                      sprawy moderatora + alert
         ▼
   VerifyResponse: werdykt, dowody, ograniczenia, siła, koszt, czas
@@ -77,9 +77,10 @@ propozycję (bez odpowiadania na nie w promptcie), a odpowiedź ma formę wprost
 - `insufficient_evidence` → „Nie udało mi się potwierdzić tej informacji.” + czego brakuje,
 - `not_verifiable` → „Tego nie da się rozstrzygnąć na podstawie dostępnych źródeł.”.
 
-Pytania o sam fact-check („Czy Demagog to sprawdził?”) są obsługiwane osobno: system szuka
-recenzji wskazanego wydawcy w Google Fact Check i odpowiada, czy publikacja istnieje, podając
-jej ocenę i link. Brak recenzji nie jest dowodem, że wydawca tego nie sprawdzał.
+Pytania o sam fact-check („Czy Demagog to sprawdził?”) są obsługiwane osobno: jeśli ustawiono
+opcjonalny klucz Google Fact Check, system szuka recenzji wskazanego wydawcy i odpowiada, czy
+publikacja istnieje, podając jej ocenę i link. Brak recenzji nie jest dowodem, że wydawca tego
+nie sprawdzał. Bez klucza Google korzysta z lokalnego korpusu i pozostałych źródeł.
 
 Dla twierdzeń o narodowości sprawcy (np. „Strzelcem w Krakowie był Polak/Ukrainiec”) działa
 deterministyczny ekstraktor zdań z recenzji EUvsDisinfo: wyciąga narodowość przypisaną
@@ -115,14 +116,15 @@ sprawcy i porównuje ją z twierdzeniem. Dzięki temu „Polak” daje `confirme
 4. **Prompt injection** — separacja danych, heurystyka, testy w zestawie ewaluacyjnym.
 5. **Prywatność** — maskowanie PII w logach, retencja (`scripts/cleanup.ts`), brak przechowywania sesji.
 6. **Dostępność i nadużycia** — rate limit, limity wejścia, czytelny interfejs, komunikaty błędów.
-7. **Zależności zewnętrzne** — OpenRouter, Jina, Google; awaria kończy się statusem `error`, nie werdyktem.
+7. **Zależności zewnętrzne** — DeepSeek API, Jina, Wikipedia; awaria kończy się statusem `error`, nie werdyktem.
 
 ## Ograniczenia demonstracji
 
 - Drugi kanał (Discord) jest w osobnym repozytorium i korzysta z `POST /verify`.
-- Klucz `GOOGLE_FACT_CHECK_API_KEY` musi być ustawiony, aby system mógł wydawać werdykty
-  oparte na fact-checkach.
+- Jedynym wymaganym kluczem jest `DEEPSEEK_API_KEY`. Google Fact Check jest opcjonalny;
+  bez niego system korzysta z lokalnego korpusu i pozostałych źródeł.
 - W obecnym zestawie 30 przypadków macro-F1 wynosi 0,767 (cel 0,75), bo klasa „fałszywe” nie ma
   źródła, które wprost obala twierdzenie; system wtedy wstrzymuje się zamiast zgadywać.
   Pokrycie cytowań (100%), wstrzymanie (100%), injection (100%) i mediana (4,5 s) są w normie.
-- Multimodalność (OCR, transkrypcja) jest przygotowana w modułach, ale nie jest częścią ścieżki MVP.
+- OCR obrazów działa przez DeepSeek. Transkrypcja audio (DeepSeek ASR) jest przygotowana
+  w module, ale nie jest jeszcze podłączona do `/verify`.

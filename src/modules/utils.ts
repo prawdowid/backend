@@ -1,5 +1,6 @@
 import { fetchWithProxy } from "./proxy";
 import { cachedPageFetch } from "./pagecache";
+import { DeepSeekWrapper } from "./deepseek";
 
 const JINA_READER_URL = "https://r.jina.ai/";
 
@@ -12,7 +13,6 @@ export async function Markdown(url: string): Promise<string> {
             accept: "text/plain",
             "x-return-format": "markdown",
         },
-        signal: AbortSignal.timeout(7000),
     });
 
     if (!response.ok) {
@@ -33,8 +33,9 @@ export async function ReadableText(url: string): Promise<string> {
 }
 
 async function fetchReadableText(url: string): Promise<string> {
-    // Direct HTML fetch first: no paid Jina quota for ordinary news pages.
     try {
+        return await Markdown(url);
+    } catch {
         const response = await fetchWithProxy(url, {
             headers: {
                 "user-agent":
@@ -50,7 +51,7 @@ async function fetchReadableText(url: string): Promise<string> {
         }
 
         const html = await response.text();
-        const text = html
+        return html
             .replace(/<script[\s\S]*?<\/script>/gi, " ")
             .replace(/<style[\s\S]*?<\/style>/gi, " ")
             .replace(/<\/(p|div|h[1-6]|li|tr|section|article|blockquote)>/gi, "\n")
@@ -64,12 +65,6 @@ async function fetchReadableText(url: string): Promise<string> {
             .replace(/\n{3,}/g, "\n\n")
             .trim()
             .slice(0, 100_000);
-
-        // JS-heavy pages return only navigation; let Jina try those.
-        if (text.length >= 500) return text;
-        throw new Error("Strona zwróciła zbyt mało tekstu.");
-    } catch {
-        return await Markdown(url);
     }
 }
 
@@ -83,29 +78,36 @@ export interface OCRResponse {
 }
 
 /**
- * Extracts text from a base64 image via DeepSeek-OCR.
+ * DeepSeek OCR keeps layout tokens such as `<|ref|>Title<|/ref|>` and
+ * `<|box|>[[x1,y1,x2,y2]]<|/box|>` in the recognized text. They are useful for
+ * cropping, but must not reach claim extraction.
+ */
+function cleanOcrText(value: string): string {
+    return value
+        .replace(/<\|box\|>\[\[[\s\S]*?\]\]<\|\/box\|>/gi, " ")
+        .replace(/<\|[^|]*\|>/g, " ")
+        .replace(/[ \t]+/g, " ")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+}
+
+/**
+ * Extracts text from a base64 image or PDF via the DeepSeek OCR API.
  * Accepts raw base64 or a `data:<mime>;base64,` URI.
+ *
+ * The DeepSeek key is the same one used by chat, so no extra OCR key or URL is
+ * required.
  */
 export async function DeepSeekOCRExtract(b64: string): Promise<OCRResponse> {
-    const bytes = Buffer.from(b64.replace(/^data:[\w.+-]+\/[\w.+-]+;base64,/i, ""), "base64");
-    if (bytes.length === 0) throw new Error("Empty base64 image");
+    const result = await DeepSeekWrapper.OCR(b64);
+    const text = (result.pages ?? []).map((page) => cleanOcrText(page.text ?? ""));
 
-    const ext = bytes.subarray(0, 5).toString() === "%PDF-" ? "pdf" : "png";
-    
-    const form = new FormData();
-    form.append("file", new Blob([bytes]), `image.${ext}`);
-
-    const url = process.env["DEEPSEEK_OCR_URL"];
-    if (!url) throw new Error("DEEPSEEK_OCR_URL is not set");
-
-    const response = await fetch(url, { method: "POST", body: form });
-
-    if (!response.ok) {
-        const detail = await response.text().catch(() => "");
-        throw new Error(
-            `DeepSeek OCR request failed (${response.status} ${response.statusText})${detail ? `: ${detail.slice(0, 500)}` : ""}`,
-        );
-    }
-
-    return (await response.json()) as OCRResponse;
+    return {
+        text,
+        confidence: null,
+        status: text.length > 0 ? "ok" : "empty",
+        message: null,
+        processed_image_url: null,
+        ocr_input_parts: null,
+    };
 }

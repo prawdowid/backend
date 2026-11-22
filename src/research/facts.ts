@@ -52,6 +52,12 @@ function norm(value: unknown): string {
         .trim();
 }
 
+/** A negated claim flips the relation of its affirmative form. */
+function flip(relation: "supports" | "refutes", negated: boolean): "supports" | "refutes" {
+    if (!negated) return relation;
+    return relation === "supports" ? "refutes" : "supports";
+}
+
 const ELECTION_ROUNDS: Record<number, number> = {
     1990: 2,
     1995: 2,
@@ -97,7 +103,7 @@ export function electionRoundEvidence(
             `${rounds === 1 ? "jednej turze" : `${rounds} turach`}. ` +
             "Samo zwycięstwo nie dowodzi wygranej we wskazanej turze.",
         type: "secondary",
-        relation: "refutes",
+        relation: flip("refutes", claim.fact?.neg === true),
     };
 }
 
@@ -117,7 +123,7 @@ export function membershipEvidence(claim: ClaimInput, retrievedAt: string): Evid
     const object = norm(fact.o);
     const predicate = norm(fact.p);
     const text = norm(`${claim.text} ${claim.details ?? ""} ${fact.p} ${fact.o}`);
-    if (/powinien|powinna|powinno|should|ought|nalezy|należy|trzeba|postulat/.test(text)) {
+    if (/powinien|powinna|powinno|should|ought|nalezy(?!\s+do)|należy(?!\s+do)|trzeba|postulat/.test(text)) {
         return null;
     }
     if (!/\b(polska|poland|rzeczpospolita)\b/.test(subject)) return null;
@@ -134,7 +140,10 @@ export function membershipEvidence(claim: ClaimInput, retrievedAt: string): Evid
 
     const actualYear = eu ? 2004 : 1999;
     const claimedYear = Number(/\b(19\d{2}|20\d{2})\b/.exec(text)?.[1]);
-    const relation = claimedYear && claimedYear !== actualYear ? "refutes" : "supports";
+    const relation = flip(
+        claimedYear && claimedYear !== actualYear ? "refutes" : "supports",
+        fact.neg === true,
+    );
 
     return {
         title: eu
@@ -207,7 +216,10 @@ export function electionWinnerEvidence(
     if (!lost && !won) return null;
 
     const claimSaysWinner = !lost;
-    const relation = claimSaysWinner ? "supports" : "refutes";
+    const relation = flip(
+        claimSaysWinner ? "supports" : "refutes",
+        claim.fact?.neg === true,
+    );
 
     return {
         title: `Wybory prezydenckie w Polsce w ${year} roku — wynik`,
@@ -261,11 +273,14 @@ export function headOfGovernmentEvidence(
     const subject = norm(fact.s);
     if (!subject) return null;
 
-    const relation = office.match.some(
-        (name) => subject.includes(name) || name.includes(subject),
-    )
-        ? "supports"
-        : "refutes";
+    const relation = flip(
+        office.match.some(
+            (name) => subject.includes(name) || name.includes(subject),
+        )
+            ? "supports"
+            : "refutes",
+        fact.neg === true,
+    );
 
     return {
         title: `Premier Polski w ${year} roku`,
@@ -283,6 +298,152 @@ export function headOfGovernmentEvidence(
     };
 }
 
+const CURRENT_PRESIDENT = {
+    name: "Karol Nawrocki",
+    url: "https://www.prezydent.pl/",
+};
+
+/** Current Polish head of state; handles "X resigned as president" claims. */
+export function presidentStatusEvidence(
+    claim: ClaimInput,
+    retrievedAt: string,
+): Evidence | null {
+    const fact = claim.fact;
+    if (!fact) return null;
+
+    const text = norm(`${claim.text} ${claim.quote ?? ""} ${fact.s} ${fact.o}`);
+    if (!/prezydent|president/.test(text)) return null;
+
+    const year = Number(/\b(19\d{2}|20\d{2})\b/.exec(text)?.[1]);
+    if (year && year < 2025) return null;
+
+    const subject = norm(fact.s);
+    if (!subject.includes("nawrocki")) return null;
+
+    const resigned = /\b(z?rezygn\w*|resign\w*|ustąpi\w*|ustap\w*|step[\s_-]?down|opuści\w*|opusci\w*)\b/.test(
+        text,
+    );
+    if (!resigned && !/prezydent|president/.test(norm(fact.o))) return null;
+
+    return {
+        title: "Prezydent Rzeczypospolitej Polskiej",
+        publisher: "Oficjalna strona Prezydenta RP",
+        publishedAt: null,
+        retrievedAt,
+        url: CURRENT_PRESIDENT.url,
+        excerpt: resigned
+            ? `Prezydentem Rzeczypospolitej Polskiej jest ${CURRENT_PRESIDENT.name}. Nie złożył rezygnacji.`
+            : `Prezydentem Rzeczypospolitej Polskiej jest ${CURRENT_PRESIDENT.name}.`,
+        type: "primary",
+        relation: flip(resigned ? "refutes" : "supports", fact.neg === true),
+    };
+}
+
+type CapitalFact = {
+    country: string;
+    capital: string;
+    url: string;
+    /** Stems that identify the country in the object ("Niemiec", "Niemcy"). */
+    matches: string[];
+};
+
+const CAPITALS: CapitalFact[] = [
+    { country: "Polska", capital: "Warszawa", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/poland_pl", matches: ["polsk"] },
+    { country: "Niemcy", capital: "Berlin", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/germany_pl", matches: ["niem", "german"] },
+    { country: "Francja", capital: "Paryż", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/france_pl", matches: ["franc", "france"] },
+    { country: "Czechy", capital: "Praga", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/czechia_pl", matches: ["czech"] },
+    { country: "Słowacja", capital: "Bratysława", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/slovakia_pl", matches: ["slowac", "słowac", "slovak"] },
+    { country: "Włochy", capital: "Rzym", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/italy_pl", matches: ["wloch", "włoch", "wlos", "włosz", "ital"] },
+    { country: "Hiszpania", capital: "Madryt", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/spain_pl", matches: ["hiszpan", "spain"] },
+    { country: "Litwa", capital: "Wilno", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/lithuania_pl", matches: ["litw"] },
+    { country: "Łotwa", capital: "Ryga", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/latvia_pl", matches: ["lotw", "łotw"] },
+    { country: "Estonia", capital: "Tallinn", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/estonia_pl", matches: ["eston"] },
+    { country: "Szwecja", capital: "Sztokholm", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/sweden_pl", matches: ["szwecj", "swed"] },
+    { country: "Dania", capital: "Kopenhaga", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/denmark_pl", matches: ["dani", "denmark"] },
+    { country: "Finlandia", capital: "Helsinki", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/finland_pl", matches: ["finland"] },
+    { country: "Austria", capital: "Wiedeń", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/austria_pl", matches: ["austri"] },
+    { country: "Belgia", capital: "Bruksela", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/belgium_pl", matches: ["belgi", "belgium"] },
+    { country: "Holandia", capital: "Amsterdam", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/netherlands_pl", matches: ["holand", "nederland"] },
+    { country: "Portugalia", capital: "Lizbona", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/portugal_pl", matches: ["portug"] },
+    { country: "Grecja", capital: "Ateny", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/greece_pl", matches: ["grecj", "greece"] },
+    { country: "Węgry", capital: "Budapeszt", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/hungary_pl", matches: ["weg", "węg", "hungar"] },
+    { country: "Rumunia", capital: "Bukareszt", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/romania_pl", matches: ["rumun", "romania"] },
+    { country: "Bułgaria", capital: "Sofia", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/bulgaria_pl", matches: ["bulgar", "bułgar"] },
+    { country: "Chorwacja", capital: "Zagrzeb", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/croatia_pl", matches: ["chorwac", "croat"] },
+    { country: "Słowenia", capital: "Lublana", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/slovenia_pl", matches: ["slowen", "słowen", "sloven"] },
+    { country: "Irlandia", capital: "Dublin", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/ireland_pl", matches: ["irland", "ireland"] },
+    { country: "Cypr", capital: "Nikozja", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/cyprus_pl", matches: ["cypr"] },
+    { country: "Malta", capital: "Valletta", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/malta_pl", matches: ["malta"] },
+    { country: "Luksemburg", capital: "Luksemburg", url: "https://european-union.europa.eu/principles-countries-history/eu-countries/luxembourg_pl", matches: ["luksemb", "luxem"] },
+];
+
+const COUNTRY_GENITIVE: Record<string, string> = {
+    Polska: "Polski",
+    Niemcy: "Niemiec",
+    Francja: "Francji",
+    Czechy: "Czech",
+    Słowacja: "Słowacji",
+    Włochy: "Włoch",
+    Hiszpania: "Hiszpanii",
+    Litwa: "Litwy",
+    Łotwa: "Łotwy",
+    Estonia: "Estonii",
+    Szwecja: "Szwecji",
+    Dania: "Danii",
+    Finlandia: "Finlandii",
+    Austria: "Austrii",
+    Belgia: "Belgii",
+    Holandia: "Holandii",
+    Portugalia: "Portugalii",
+    Grecja: "Grecji",
+    Węgry: "Węgier",
+    Rumunia: "Rumunii",
+    Bułgaria: "Bułgarii",
+    Chorwacja: "Chorwacji",
+    Słowenia: "Słowenii",
+    Irlandia: "Irlandii",
+    Cypr: "Cypru",
+    Malta: "Malty",
+    Luksemburg: "Luksemburga",
+};
+
+/** "X is the capital of Y" for European countries. Deterministic and fast. */
+export function capitalEvidence(claim: ClaimInput, retrievedAt: string): Evidence | null {
+    const fact = claim.fact;
+    if (!fact) return null;
+
+    const text = norm(`${claim.text} ${claim.details ?? ""} ${fact.p} ${fact.o}`);
+    const object = norm(fact.o);
+    const subject = norm(fact.s);
+    const entry = CAPITALS.find((item) =>
+        item.matches.some((match) => object.includes(match)),
+    );
+    if (process.env["DEBUG_FACTS"] === "1") {
+        console.log("[capitals]", { text, object, subject, entry: entry?.country ?? null });
+    }
+    if (!/stolic|capital|hauptstadt/.test(text)) return null;
+    if (!entry) return null;
+
+    const claimedCapital = norm(entry.capital);
+    const subjectIsCapital =
+        subject.length > 0 &&
+        (subject.includes(claimedCapital) || claimedCapital.includes(subject));
+
+    const country = COUNTRY_GENITIVE[entry.country] ?? entry.country;
+    return {
+        title: `Stolica ${country}`,
+        publisher: "Unia Europejska",
+        publishedAt: null,
+        retrievedAt,
+        url: entry.url,
+        excerpt:
+            `Stolicą ${country} jest ${entry.capital}.` +
+            (subjectIsCapital ? "" : ` Twierdzenie wskazuje ${fact.s}.`),
+        type: "primary",
+        relation: flip(subjectIsCapital ? "supports" : "refutes", fact.neg === true),
+    };
+}
+
 /**
  * One deterministic answer for the facts we can settle without search.
  * Returns null when the claim is outside these small tables.
@@ -293,7 +454,9 @@ export function commonFactEvidence(claim: ClaimInput, retrievedAt: string): Evid
         currencyEvidence(claim, retrievedAt) ??
         electionRoundEvidence(claim, retrievedAt) ??
         electionWinnerEvidence(claim, retrievedAt) ??
-        headOfGovernmentEvidence(claim, retrievedAt)
+        headOfGovernmentEvidence(claim, retrievedAt) ??
+        presidentStatusEvidence(claim, retrievedAt) ??
+        capitalEvidence(claim, retrievedAt)
     );
 }
 
@@ -310,7 +473,7 @@ export function currencyEvidence(claim: ClaimInput, retrievedAt: string): Eviden
 
     // A normative "Poland should adopt the euro" is an opinion, not a fact.
     if (
-        /powinien|powinna|powinno|should|ought|nalezy|należy|trzeba|postulat/.test(
+        /powinien|powinna|powinno|should|ought|nalezy(?!\s+do)|należy(?!\s+do)|trzeba|postulat/.test(
             opinion,
         )
     ) {
@@ -335,7 +498,7 @@ export function currencyEvidence(claim: ClaimInput, retrievedAt: string): Eviden
         return {
             ...base,
             excerpt: `${fact.s} nie należy do strefy euro, więc nie posługuje się walutą euro.`,
-            relation: "refutes",
+            relation: flip("refutes", fact.neg === true),
         };
     }
 
@@ -343,7 +506,7 @@ export function currencyEvidence(claim: ClaimInput, retrievedAt: string): Eviden
         return {
             ...base,
             excerpt: `${fact.s} należy do strefy euro i posługuje się walutą euro.`,
-            relation: "supports",
+            relation: flip("supports", fact.neg === true),
         };
     }
 

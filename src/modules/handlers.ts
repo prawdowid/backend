@@ -1,5 +1,5 @@
 import { Markdown } from "./utils";
-import { OpenRouterWrapper } from "./openrouter";
+import { DeepSeekWrapper } from "./deepseek";
 import { ProcessImageSchema, ProcessTextSchema, ProcessURLSchema, ProcessVideoSchema } from "./schemas";
 import { containsStatementsQuestion } from "./questions";
 
@@ -16,7 +16,7 @@ export async function processUrl({ body }: { body: ProcessURLBody }) {
 }
 
 export async function processText({ body }: { body: ProcessTextBody }) {
-    const result = await OpenRouterWrapper.Jev({
+    const result = await DeepSeekWrapper.Decide({
         text: body.text,
     }, {
         contains_statements: containsStatementsQuestion,
@@ -29,7 +29,7 @@ export async function processText({ body }: { body: ProcessTextBody }) {
     }
 
     // TODO: deepseek summary faktów
-    // TODO: Jev sprawdza cache (pókico in-memory)
+    // TODO: DeepSeek sprawdza cache (pókico in-memory)
     // weryfikuje to czego nie ma w cache, zwraca od razu to co ma.
 
     return { ok: true, text: body.text }

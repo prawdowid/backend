@@ -682,11 +682,6 @@
       children.push(el("p", { className: "hint", text: "Brak źródeł dla tego twierdzenia." }));
     }
 
-    var limits = limitsList(claim && claim.limitations);
-    if (limits) {
-      children.push(el("div", { className: "limits", children: [el("h3", { text: "Ograniczenia" }), limits] }));
-    }
-
     return el("article", { className: "claim", children: children });
   }
 
@@ -759,15 +754,6 @@
       claims.forEach(function (claim) {
         children.push(claimCard(claim));
       });
-    }
-
-    if (limitations.length) {
-      children.push(
-        el("div", {
-          className: "summary",
-          children: [el("h2", { text: "Ograniczenia całości" }), limitsList(limitations)]
-        })
-      );
     }
 
     children.push(

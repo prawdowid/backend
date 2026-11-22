@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { readFile } from "node:fs/promises";
 import { runPipeline, MemoryCacheStore } from "../src/pipeline";
-import { OpenRouterWrapper } from "../src/modules/openrouter";
+import { DeepSeekWrapper } from "../src/modules/deepseek";
 
 const FILE =
     "C:\\Users\\admin\\Documents\\GitHub\\hackathon\\DANE\\do_udostępnienia\\1\\«Wiem, kto strzelał»_ zamach na Rafała Brzoskę, założyciela InPostu — Gazeta.pl.html";
@@ -32,7 +32,7 @@ const cold = await runPipeline(text, cache);
 console.log(`status=${cold.status} claims=${cold.claims.length} hits=${cold.hits.length} misses=${cold.misses.length}`);
 
 console.log("\n=== seeding cache with the extracted claims (verdict=false, fake keys) ===");
-const vectors = await OpenRouterWrapper.Embed(cold.misses.map((c) => c.text));
+const vectors = await DeepSeekWrapper.Embed(cold.misses.map((c) => c.text));
 for (let i = 0; i < cold.misses.length; i++) {
     const claim = cold.misses[i]!;
     await cache.put({

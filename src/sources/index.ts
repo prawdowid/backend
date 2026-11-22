@@ -1,4 +1,4 @@
-import { OpenRouterWrapper, cosineSimilarity } from "../modules/openrouter";
+import { DeepSeekWrapper, cosineSimilarity } from "../modules/deepseek";
 import type { SourceDoc, SourceHit } from "../pipeline/types";
 import { SOURCE_DOCS } from "./manifest";
 
@@ -36,7 +36,7 @@ async function embedCorpus(): Promise<number[][]> {
 
     for (let offset = 0; offset < SOURCE_DOCS.length; offset += BATCH_SIZE) {
         const batch = SOURCE_DOCS.slice(offset, offset + BATCH_SIZE);
-        const batchVectors = await OpenRouterWrapper.Embed(batch.map(embedText));
+        const batchVectors = await DeepSeekWrapper.Embed(batch.map(embedText));
         if (batchVectors.length !== batch.length) {
             throw new Error(
                 `embedding count mismatch: expected ${batch.length}, got ${batchVectors.length}`,
@@ -83,7 +83,7 @@ export async function searchSources(query: string, k: number = DEFAULT_K): Promi
 
     try {
         const embedded = await Promise.all([
-            OpenRouterWrapper.Embed(trimmed),
+            DeepSeekWrapper.Embed(trimmed),
             getCorpusVectors(),
         ]);
         queryVector = embedded[0];

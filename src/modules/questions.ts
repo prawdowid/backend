@@ -1,7 +1,7 @@
 import type {
     DecisionsChoiceQuestion,
     DecisionsNoulQuestion,
-} from "@openrouter/sdk/models";
+} from "./decisions";
 
 /** TODO: lepszy prompt */
 export const containsStatementsQuestion: DecisionsNoulQuestion = {
@@ -13,7 +13,7 @@ export const containsStatementsQuestion: DecisionsNoulQuestion = {
     },
 };
 
-/** One cached statement: `id` is the Redis key, `text` is what Jev sees. */
+/** One cached statement: `id` is the Redis key, `text` is what DeepSeek sees. */
 export type StatementCandidate = {
     id: string;
     text: string;
@@ -42,7 +42,7 @@ export function createStatementCacheQuestions(
         throw new Error("createStatementCacheQuestions: candidates is empty");
     }
 
-    // Jev Choice supports max 255 options; prefilter in Redis/embeddings first.
+    // DeepSeek Choice supports max 255 options; prefilter in Redis/embeddings first.
     if (candidates.length > 255) {
         throw new Error("createStatementCacheQuestions: max 255 candidates, prefilter first");
     }

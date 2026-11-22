@@ -623,7 +623,7 @@ async function main(): Promise<void> {
             durationMs,
             durationHuman: humanDuration(durationMs),
             googleFactCheckKey: Boolean(process.env["GOOGLE_FACT_CHECK_API_KEY"]?.trim()),
-            openRouterKey: Boolean(process.env["OPENROUTER_API_KEY"]?.trim()),
+            deepseekKey: Boolean(process.env["DEEPSEEK_API_KEY"]?.trim()),
             models: [...models],
         },
         summary,

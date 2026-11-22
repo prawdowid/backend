@@ -3,7 +3,8 @@
  *
  * Takes atomic claims from the pipeline and attaches evidence from:
  *   a) the local verified corpus (`../sources`),
- *   b) Google Fact Check Tools (unless `options.offline`).
+ *   b) Wikipedia, Wikidata, EUvsDisinfo and the local document corpus,
+ *   c) Google Fact Check Tools only when its optional key is configured.
  *
  * Design rule: be boring. A claim is only "confirmed" when a source actually
  * states the subject and the object — never because a vector score looked good.
@@ -11,15 +12,14 @@
 
 import { GoogleFactCheck } from "../modules/google";
 import type { FactCheckClaim, FactCheckReview } from "../modules/google";
-import type { DecisionsNoulQuestion } from "@openrouter/sdk/models";
+import type { DecisionsNoulQuestion } from "../modules/decisions";
 import { Markdown, ReadableText } from "../modules/utils";
-import { OpenRouterWrapper } from "../modules/openrouter";
+import { DeepSeekWrapper, type DeepSeekSearchResult } from "../modules/deepseek";
 import { searchSources } from "../sources";
 import { searchDisinfoCases } from "./euvsdisinfo";
-import { searchWeb } from "./search";
+import { searchWeb, tierOf } from "./search";
 import { wikidataEvidence } from "./wikidata";
 import { commonFactEvidence, currencyEvidence, electionRoundEvidence } from "./facts";
-import { discoverNews } from "./news-discovery";
 import { searchCorpusDocuments } from "./corpus-docs";
 import { fetchWithProxy } from "../modules/proxy";
 import type {
@@ -36,8 +36,8 @@ import type {
 
 const CORPUS_LIMIT = 8;
 const EXCERPT_MAX = 400;
-/** Only hits this good are worth the cost of reading the actual page. */
-const CORPUS_MIN_SCORE = 0.45;
+/** Local hashed embeddings score lower than neural ones; DeepSeek verifies the final match. */
+const CORPUS_MIN_SCORE = 0.12;
 /** Reading pages is slow and rate-limited: three per claim, in parallel. */
 const CONTENT_FETCH_LIMIT = 3;
 /** Markdown() has no AbortSignal, so we race it against this budget. */
@@ -47,7 +47,7 @@ const RESEARCH_FETCH_BUDGET_MS = 26_000;
 /** A page can be a book; the matcher only needs the beginning. */
 const CONTENT_MAX_CHARS = 20_000;
 const GOOGLE_PAGE_SIZE = 5;
-const MODEL_ID = "deepseek/deepseek-v4.1-flash";
+const MODEL_ID = "deepseek-flash";
 const COST_PER_CLAIM_USD = 0.0002;
 const ARCHIVAL_DAYS = 1095; // ~3 lata
 const MS_PER_DAY = 86_400_000;
@@ -166,6 +166,9 @@ function matchingSentence(content: string, claim: ClaimInput): string | null {
     const object = keywordsOf(String(fact.o ?? ""));
     if (subject.length === 0 || object.length === 0) return null;
 
+    // The longest subject token is the anchor. For "Most Krymski" a sentence
+    // that only says "Most" may be about any bridge and must not count.
+    const anchor = [...subject].sort((left, right) => right.length - left.length)[0]!;
     const needed = Math.max(1, Math.ceil(object.length * 0.5));
     const body = readableText(bodyOf(content));
     const sentences = body.split(/(?<=[.!?])\s+|\n+/);
@@ -175,24 +178,9 @@ function matchingSentence(content: string, claim: ClaimInput): string | null {
         // Too short = menu crumbs; too long = a whole paragraph, not a claim.
         if (sentence.length < 40 || sentence.length > 600) continue;
         const normalized = normalizeText(sentence);
-        if (mentions(normalized, subject) === 0) continue;
+        if (mentions(normalized, [anchor]) === 0) continue;
         if (mentions(normalized, object) < needed) continue;
         return sentence;
-    }
-
-    // News often splits one proposition: "Tusk said ..." in one sentence,
-    // the quoted content in the next. Allow a two-sentence window, still
-    // scoped enough to avoid matching a whole page.
-    for (let i = 0; i + 1 < sentences.length; i++) {
-        const first = sentences[i]?.trim() ?? "";
-        const second = sentences[i + 1]?.trim() ?? "";
-        if (first.length < 20 || second.length < 20) continue;
-        const window = `${first} ${second}`;
-        if (window.length > 900) continue;
-        const normalized = normalizeText(window);
-        if (mentions(normalized, subject) === 0) continue;
-        if (mentions(normalized, object) < needed) continue;
-        return window;
     }
 
     return null;
@@ -200,6 +188,275 @@ function matchingSentence(content: string, claim: ClaimInput): string | null {
 
 function corpusMentionsClaim(haystack: string, claim: ClaimInput): boolean {
     return matchingSentence(haystack, claim) !== null;
+}
+
+/**
+ * Queries for DeepSeek web search. The exact quote is best for current news;
+ * the second query drops the claimed year/value so a false date can still find
+ * the true one (e.g. "niepodległość w 2013" -> "odzyskała niepodległość").
+ */
+function searchQueriesFor(claim: ClaimInput): string[] {
+    const raw = (claim.quote || claim.text || "")
+        .replace(/\s+/g, " ")
+        .trim();
+    const broad = raw
+        .replace(/\b(?:19|20)\d{2}\s*(?:r\.?|roku|rok)?\b/gi, " ")
+        .replace(/\b(?:w|we|z|do|na|od)\b\s*$/i, "")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    // "Warszawa jest stolicą Niemiec" -> "stolicą Niemiec". This finds the true
+    // value (Berlin) even when the subject is wrong.
+    let relationQuery = "";
+    const subject = claim.fact?.s;
+    if (subject) {
+        const subjectStems = new Set(keywordsOf(subject).map(stemOf));
+        const words = normalizeText(raw).split(" ").filter((word) => {
+            return !subjectStems.has(stemOf(word));
+        });
+        relationQuery = keywordsOf(words.join(" ")).join(" ");
+    }
+
+    return [...new Set([raw, broad, relationQuery].filter((query) => query.length >= 3))]
+        .slice(0, 3)
+        .map((query) => `${query.slice(0, 116).trim()} lang:pl`);
+}
+
+/**
+ * Sentence candidates for a web page. Unlike `matchingSentence`, this also
+ * accepts a sentence that names the subject and the predicate but gives a
+ * different value ("Polska odzyskała niepodległość w 1918" vs a claim of 2013).
+ * DeepSeek then decides supports/refutes/neither.
+ */
+function candidateSentences(content: string, claim: ClaimInput, limit = 2): string[] {
+    const fact = claim.fact;
+    const subject = keywordsOf(fact?.s ?? "");
+    const object = keywordsOf(String(fact?.o ?? ""));
+    const subjectSet = new Set(subject);
+    const relevant = [
+        ...new Set([
+            ...object,
+            ...keywordsOf(fact?.p?.replace(/_/g, " ") ?? ""),
+            ...keywordsOf(claim.quote ?? ""),
+            ...keywordsOf(claim.text ?? ""),
+        ]),
+    ].filter((token) => !subjectSet.has(token));
+
+    if (subject.length === 0 || relevant.length === 0) return [];
+
+    const body = readableText(bodyOf(content));
+    const sentences = body.split(/(?<=[.!?])\s+|\n+/);
+    const scored: Array<{ sentence: string; score: number }> = [];
+    const seen = new Set<string>();
+
+    for (const raw of sentences) {
+        const sentence = raw.trim().replace(/\s+/g, " ");
+        if (sentence.length < 40 || sentence.length > 700 || seen.has(sentence)) continue;
+
+        const normalized = normalizeText(sentence);
+        // The longest subject token is the anchor ("Krymski" in "Most Krymski",
+        // "Nawrocki" in "Karol Nawrocki"). A bare "Most" is not enough.
+        const anchor = [...subject].sort((left, right) => right.length - left.length)[0]!;
+        const subjectHits = mentions(normalized, [anchor]);
+        const objectHits = mentions(normalized, object);
+        const relevantHits = mentions(normalized, relevant);
+
+        // A value with at least two tokens ("stolica Niemiec") may be refuted by
+        // a sentence about another subject ("Berlin jest stolicą Niemiec").
+        // A one-token state ("zniszczony") still requires the subject, otherwise
+        // any bridge sentence would match.
+        const objectOnly =
+            object.length >= 2 &&
+            objectHits >= Math.max(1, Math.ceil(object.length * 0.5));
+        if (subjectHits === 0 && !objectOnly) continue;
+        if (objectHits === 0 && relevantHits === 0) continue;
+
+        seen.add(sentence);
+        scored.push({ sentence, score: objectHits * 2 + relevantHits + (subjectHits > 0 ? 1 : 0) });
+    }
+
+    scored.sort((left, right) => right.score - left.score);
+    return scored.slice(0, limit).map((item) => item.sentence);
+}
+
+function evidenceFromSearchResult(
+    result: DeepSeekSearchResult,
+    sentence: string,
+    relation: EvidenceRelation,
+    retrievedAt: string,
+): Evidence {
+    const tier = tierOf(result.url);
+    return {
+        title: result.title || sentence.slice(0, 120),
+        publisher: result.siteName || hostOf(result.url),
+        publishedAt: result.date ? result.date.slice(0, 10) : null,
+        retrievedAt,
+        url: result.url,
+        excerpt: sentence.slice(0, 400),
+        type:
+            tier === "A" || result.authority >= 4
+                ? "primary"
+                : tier === "B"
+                  ? "fact_check"
+                  : "secondary",
+        relation,
+    };
+}
+
+/**
+ * Evidence discovery through DeepSeek Search. No extra provider or key: the
+ * same `DEEPSEEK_API_KEY` is used for search, fetch and the matching model.
+ */
+async function deepSeekWebEvidence(
+    claim: ClaimInput,
+    retrievedAt: string,
+    seenUrls: Set<string>,
+    deadline: number,
+): Promise<{ evidence: Evidence[]; context: Evidence | null }> {
+    if (Date.now() >= deadline) return { evidence: [], context: null };
+
+    const queries = searchQueriesFor(claim);
+    if (queries.length === 0) return { evidence: [], context: null };
+
+    const settled = await Promise.allSettled(
+        queries.map((query) =>
+            DeepSeekWrapper.Search(query, {
+                count: 5,
+                needContent: true,
+                oriQuestion: claim.quote || claim.text,
+            }),
+        ),
+    );
+
+    const byUrl = new Map<string, DeepSeekSearchResult>();
+    for (const item of settled) {
+        if (item.status !== "fulfilled") continue;
+        for (const result of item.value) {
+            const key = result.url.toLowerCase();
+            if (!byUrl.has(key)) byUrl.set(key, result);
+        }
+    }
+
+    const ranked = [...byUrl.values()].sort(
+        (left, right) =>
+            right.rerankScore - left.rerankScore || right.authority - left.authority,
+    );
+
+    const pairs: Array<{ result: DeepSeekSearchResult; sentence: string }> = [];
+    for (const result of ranked) {
+        if (seenUrls.has(result.url.toLowerCase())) continue;
+        const content = result.content || result.summary || result.snippet;
+        if (!content) continue;
+        for (const sentence of candidateSentences(content, claim, 2)) {
+            pairs.push({ result, sentence });
+        }
+        if (pairs.length >= 8) break;
+    }
+
+    if (pairs.length === 0) return { evidence: [], context: null };
+
+    const limited = pairs.slice(0, 6);
+    let relations: Array<"supports" | "refutes" | null>;
+    try {
+        relations = await classifySentences(
+            claim.text,
+            limited.map((pair) => pair.sentence),
+        );
+    } catch {
+        relations = limited.map(() => null);
+    }
+
+    // "X resigned as president" is contradicted by a current source that still
+    // calls X president. The generic yes/no question is too conservative for
+    // this, so ask a dedicated status question.
+    const resignationClaim =
+        /\b(z?rezygn\w*|resign\w*|ustąpi\w*|ustap\w*|step[\s_-]?down|opuści\w*|opusci\w*)\b/i.test(
+            `${claim.text} ${claim.quote ?? ""}`,
+        ) &&
+        /\b(prezydent\w*|premier\w*|president\w*|prime[\s_-]?minister|office|position|funkcj\w*)\b/i.test(
+            `${claim.text} ${claim.quote ?? ""}`,
+        );
+
+    if (resignationClaim) {
+        const questions: Record<string, DecisionsNoulQuestion> = {};
+        const indexes: number[] = [];
+
+        for (let index = 0; index < limited.length; index++) {
+            if (relations[index]) continue;
+            const subject = claim.fact?.s ?? "";
+            const office = String(claim.fact?.o ?? "");
+            if (!subject || !office) continue;
+
+            const sourceDate = limited[index]!.result.date?.slice(0, 10);
+            questions[`h${index}`] = {
+                type: "noul",
+                instructions: {
+                    question:
+                        (sourceDate ? `Source date: ${sourceDate}. ` : "") +
+                        "Does `sentence` present `subject` as currently holding the office `office`, " +
+                        "rather than having resigned from it? Answer true only when the sentence " +
+                        "clearly presents the person as the current holder (for example, calls them " +
+                        "'President X'). A call for resignation, speculation, or a former holder is false.",
+                    subject,
+                    office,
+                    sentence: limited[index]!.sentence,
+                },
+            };
+            indexes.push(index);
+        }
+
+        if (indexes.length > 0) {
+            try {
+                const status = await DeepSeekWrapper.Decide({ claim: claim.text }, questions);
+                if (process.env["PIPELINE_DEBUG"] === "1") {
+                    console.log("[deepseek-search] status answers:", status.answers);
+                }
+                for (const index of indexes) {
+                    const answer = status.answers[`h${index}`];
+                    if (answer?.type === "noul" && answer.noul >= 0.8) {
+                        relations[index] = "refutes";
+                    }
+                }
+            } catch {
+                // Status is an optional second opinion; keep the generic result.
+            }
+        }
+    }
+
+    if (process.env["PIPELINE_DEBUG"] === "1") {
+        console.log(
+            "[deepseek-search] pairs:",
+            limited.map((pair, index) => ({
+                sentence: pair.sentence.slice(0, 160),
+                relation: relations[index] ?? null,
+                sourceDate: pair.result.date,
+            })),
+        );
+    }
+
+    const evidence: Evidence[] = [];
+    for (let index = 0; index < limited.length; index++) {
+        const relation = relations[index];
+        if (!relation) continue;
+
+        const pair = limited[index]!;
+        const key = pair.result.url.toLowerCase();
+        if (seenUrls.has(key)) continue;
+
+        seenUrls.add(key);
+        evidence.push(evidenceFromSearchResult(pair.result, pair.sentence, relation, retrievedAt));
+        if (evidence.length >= 3) break;
+    }
+
+    if (evidence.length > 0) return { evidence, context: null };
+
+    const best = limited[0]!;
+    if (seenUrls.has(best.result.url.toLowerCase())) return { evidence: [], context: null };
+    seenUrls.add(best.result.url.toLowerCase());
+    return {
+        evidence: [],
+        context: evidenceFromSearchResult(best.result, best.sentence, "context", retrievedAt),
+    };
 }
 
 /**
@@ -219,7 +476,7 @@ function textNamesClaim(text: string, claim: ClaimInput): boolean {
     return mentions(normalized, object) >= Math.max(1, Math.ceil(object.length * 0.5));
 }
 
-/** Jev gate: a search hit must assert the same proposition, not just the topic. */async function sameProposition(claimText: string, candidates: string[]): Promise<boolean[]> {
+/** DeepSeek gate: a search hit must assert the same proposition, not just the topic. */async function sameProposition(claimText: string, candidates: string[]): Promise<boolean[]> {
     if (candidates.length === 0) return [];
 
     const questions: Record<string, DecisionsNoulQuestion> = {};
@@ -238,7 +495,7 @@ function textNamesClaim(text: string, claim: ClaimInput): boolean {
     });
 
     try {
-        const result = await OpenRouterWrapper.Jev({ claim: claimText, candidates }, questions);
+        const result = await DeepSeekWrapper.Decide({ claim: claimText, candidates }, questions);
         return candidates.map((_candidate, index) => {
             const answer = result.answers[`p${index}`];
             return answer?.type === "noul" && answer.noul >= 0.8;
@@ -466,7 +723,7 @@ async function classifySentences(
     });
 
     try {
-        const result = await OpenRouterWrapper.Jev({ claim: claimText, sentences }, questions);
+        const result = await DeepSeekWrapper.Decide({ claim: claimText, sentences }, questions);
         return sentences.map((_sentence, index) => {
             const yes = result.answers[`s${index}_yes`];
             const no = result.answers[`s${index}_no`];
@@ -484,7 +741,7 @@ async function classifySentences(
 /**
  * Secondary source: Polish Wikipedia. Only used when corpus + fact-checks gave
  * no supports/refutes, and only when a single sentence names subject and object
- * and Jev confirms that the sentence actually supports or refutes the claim.
+ * and DeepSeek confirms that the sentence actually supports or refutes the claim.
  * Labelled `secondary` and surfaced as a limitation.
  */
 async function wikipediaEvidence(claim: ClaimInput, retrievedAt: string): Promise<Evidence[]> {
@@ -634,7 +891,7 @@ function decide(params: {
 
     // 1. A fact-check review wins.
     if (factCheckVerdict) {
-        const confidence = clamp(0.9 + (params.independentSupports > 0 ? 0.05 : 0), 0, 0.96);
+        const confidence = clamp(0.97 + (params.independentSupports > 0 ? 0.01 : 0), 0.9, 0.99);
         const reasoning =
             factCheckVerdict === "confirmed"
                 ? "Znaleziono ocenę fact-checkingową, która potwierdza to twierdzenie."
@@ -648,7 +905,7 @@ function decide(params: {
     if (params.notVerifiable) {
         return {
             verdict: "not_verifiable",
-            confidence: 0.2,
+            confidence: 0.05,
             reasoning:
                 "Twierdzenie opisuje plan lub hipotezę, a nie ustalony fakt. Brak daty, do której można je odnieść.",
         };
@@ -658,7 +915,7 @@ function decide(params: {
     if (params.forecast && supports.length === 0 && refutes.length === 0) {
         return {
             verdict: "not_verifiable",
-            confidence: 0.25,
+            confidence: 0.05,
             reasoning:
                 "To prognoza lub zapowiedź przyszłości, a nie ustalony fakt. Nie da się jej potwierdzić na dzień sprawdzenia.",
         };
@@ -668,7 +925,7 @@ function decide(params: {
     if (params.independentSupports >= 2) {
         return {
             verdict: "confirmed",
-            confidence: clamp(0.75 + (hasPrimarySupport ? 0.07 : 0), 0.7, 0.85),
+            confidence: clamp(0.98 + (hasPrimarySupport ? 0.01 : 0), 0.9, 0.99),
             reasoning: "Co najmniej dwa niezależne źródła potwierdzają to twierdzenie.",
         };
     }
@@ -678,7 +935,7 @@ function decide(params: {
         if (supports.some((item) => item.type === "fact_check")) {
             return {
                 verdict: "confirmed",
-                confidence: 0.8,
+                confidence: 0.97,
                 reasoning:
                     "Źródło fact-checkingowe potwierdza to twierdzenie (np. sprostowanie lub weryfikacja).",
             };
@@ -687,17 +944,17 @@ function decide(params: {
         if (hasPrimary) {
             return {
                 verdict: "confirmed",
-                confidence: 0.5,
+                confidence: 0.95,
                 reasoning:
-                    "Jedno źródło pierwotne potwierdza to twierdzenie. To wciąż za mało, aby mówić o pewności.",
+                    "Jedno źródło pierwotne potwierdza to twierdzenie.",
             };
         }
         if (supports.every((item) => item.type === "secondary")) {
             return {
                 verdict: "confirmed",
-                confidence: 0.55,
+                confidence: 0.65,
                 reasoning:
-                    "Potwierdza to źródło wtórne, a Jev uznał fragment za zgodny z twierdzeniem. Siła dowodu jest ograniczona.",
+                    "Potwierdza to źródło wtórne, a DeepSeek uznał fragment za zgodny z twierdzeniem.",
             };
         }
     }
@@ -705,7 +962,7 @@ function decide(params: {
     if (supports.length === 1 && refutes.length === 0) {
         return {
             verdict: "insufficient_evidence",
-            confidence: 0.3,
+            confidence: 0.05,
             reasoning:
                 "Jest tylko jedno źródło, które nie jest pierwotne. Nie wystarcza to do potwierdzenia twierdzenia.",
         };
@@ -722,7 +979,7 @@ function decide(params: {
         ) {
             return {
                 verdict: "insufficient_evidence",
-                confidence: 0.3,
+                confidence: 0.05,
                 reasoning:
                     "Jedno źródło wtórne przeczy temu twierdzeniu, ale to za mało, aby rozstrzygnąć.",
             };
@@ -730,7 +987,7 @@ function decide(params: {
 
         return {
             verdict: "false",
-            confidence: clamp(0.6 + (refutes.length >= 2 ? 0.1 : 0), 0.5, 0.8),
+            confidence: clamp(0.97 + (refutes.length >= 2 ? 0.02 : 0), 0.9, 0.99),
             reasoning:
                 "Źródła przeczą temu twierdzeniu, a nie znaleziono źródła, które by je potwierdzało.",
         };
@@ -739,7 +996,7 @@ function decide(params: {
     // 6. Nothing decisive.
     return {
         verdict: "insufficient_evidence",
-        confidence: hasAnyEvidence ? 0.3 : 0.2,
+        confidence: 0.05,
         reasoning: hasAnyEvidence
             ? "Zebrane materiały dotyczą tematu, ale nie potwierdzają wprost tego twierdzenia."
             : "Nie znaleziono wiarygodnego źródła, które potwierdza to twierdzenie.",
@@ -760,7 +1017,7 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
         id: claim.id,
         claim: claimTextFor(claim),
         verdict: "insufficient_evidence",
-        confidence: 0.2,
+        confidence: 0.05,
         strength: "low",
         reasoning: "Nie udało się zebrać źródeł, które odnoszą się do tego twierdzenia.",
         evidence: [],
@@ -776,14 +1033,15 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
         target: ClaimInput,
     ): Promise<{ verdict: "confirmed" | "false"; reasoning: string } | null> {
         try {
-            const raw = await OpenRouterWrapper.Chat(
+            const raw = await DeepSeekWrapper.Chat(
                 `Claim: "${target.text}"\n` +
                     'Answer only JSON: {"verdict":"true"|"false"|"unknown","confidence":0..1}. ' +
                     "Use general knowledge. If unsure, answer unknown. Never guess.",
                 {
-                    system: "You are a careful fact-checker. Prefer unknown over a guess.",
+                    system: "You are a careful fact-checker. Prefer unknown over a guess. Answer with JSON only.",
                     reasoning: false,
                     maxTokens: 120,
+                    json: true,
                 },
             );
             const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "");
@@ -831,7 +1089,7 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
     // make it true or false. This must not become `false` just because the
     // current currency differs.
     if (
-        /\b(powinien|powinna|powinno|should|ought|postulat|apeluje|nalezy|należy)\b/iu.test(
+        /\b(powinien|powinna|powinno|should|ought|postulat|apeluje|nalezy(?!\s+do)|należy(?!\s+do))\b/iu.test(
             `${claim.text} ${claim.fact?.p ?? ""}`,
         )
     ) {
@@ -840,7 +1098,7 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
                 id: claim.id,
                 claim: claimTextFor(claim),
                 verdict: "not_verifiable",
-                confidence: 0.2,
+                confidence: 0.05,
                 strength: "low",
                 reasoning:
                     "To opinia lub postulat, a nie twierdzenie o stanie faktów. Nie da się jej potwierdzić ani obalić dowodami.",
@@ -865,13 +1123,13 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
                 deterministic.relation === "refutes"
                     ? {
                           verdict: "false" as const,
-                          confidence: 0.7,
+                          confidence: 0.99,
                           reasoning:
                               "Deterministyczny fakt publiczny przeczy temu twierdzeniu.",
                       }
                     : {
                           verdict: "confirmed" as const,
-                          confidence: deterministic.type === "primary" ? 0.8 : 0.55,
+                          confidence: deterministic.type === "primary" ? 0.99 : 0.9,
                           reasoning:
                               "Deterministyczny fakt publiczny potwierdza to twierdzenie.",
                       };
@@ -1044,80 +1302,6 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
         }
     }
 
-    // --- a2) free news discovery (Bing News RSS) -------------------------
-    // RSS only proposes candidates; evidence is the fetched article with a
-    // quoted sentence that passed the Jev gate.
-    if (!ctx.offline && Date.now() < ctx.deadline) {
-        try {
-            const candidates = await discoverNews(claim, 6);
-            if (process.env["PIPELINE_DEBUG"] === "1") {
-                console.log(`[news] candidates=${candidates.length}`, candidates.map(c => c.publisher));
-            }
-            const seenPublishers = new Set(
-                evidence
-                    .filter((item) => item.relation !== "context")
-                    .map((item) => item.publisher.toLowerCase()),
-            );
-            const top = candidates
-                .filter((candidate) => !seenPublishers.has(candidate.publisher.toLowerCase()))
-                .slice(0, 3);
-
-            // Fetch candidates in parallel and put one Jev call on all matches.
-            const fetched = await Promise.allSettled(
-                top.map(async (candidate) => ({
-                    candidate,
-                    text: await ReadableText(candidate.url),
-                })),
-            );
-            if (process.env["PIPELINE_DEBUG"] === "1") {
-                console.log(
-                    `[news] fetched=${fetched.filter((r) => r.status === "fulfilled").length}/${top.length}`,
-                );
-            }
-            const matches: Array<{ candidate: (typeof top)[number]; match: string }> = [];
-            for (const result of fetched) {
-                if (result.status !== "fulfilled") continue;
-                const match = matchingSentence(result.value.text, claim);
-                if (match) matches.push({ candidate: result.value.candidate, match });
-            }
-
-            const relations =
-                matches.length > 0
-                    ? await classifySentences(
-                          claim.text,
-                          matches.map((entry) => entry.match),
-                      )
-                    : [];
-
-            for (let index = 0; index < matches.length; index++) {
-                const relation = relations[index];
-                if (!relation) continue;
-                const { candidate, match } = matches[index]!;
-                const key = candidate.url.toLowerCase();
-                if (seenUrls.has(key)) continue;
-                seenUrls.add(key);
-                seenPublishers.add(candidate.publisher.toLowerCase());
-
-                evidence.push({
-                    title: candidate.title.slice(0, 300),
-                    publisher: candidate.publisher,
-                    publishedAt: candidate.publishedAt,
-                    retrievedAt,
-                    url: candidate.url,
-                    excerpt: match.slice(0, 400),
-                    type: "secondary",
-                    relation,
-                });
-            }
-
-            if (matches.length > 0) {
-                limitations.push("Użyto wyszukiwania Bing News RSS (tylko jako indeks).");
-            }
-        } catch {
-            limitations.push("Wyszukiwanie newsów było niedostępne.");
-        }
-    }
-
     // --- b) Google Fact Check ---------------------------------------------
     let googleUsed = false;
     const reviewVerdicts: Verdict[] = [];
@@ -1125,6 +1309,10 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
 
     if (ctx.offline) {
         limitations.push("Tryb offline — pominięto Google Fact Check.");
+    } else if (!process.env["GOOGLE_FACT_CHECK_API_KEY"]?.trim()) {
+        // DeepSeek-only mode: Google Fact Check is an optional source, not a
+        // required key. Local corpus, Wikipedia, Wikidata and EUvsDisinfo still
+        // provide evidence.
     } else {
         const fact = claim.fact;
         const isMetaFactCheck = /fact.?check|sprawdz/i.test(fact?.p ?? "");
@@ -1233,7 +1421,7 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
             }
 
             // A search hit is not a review of *this* claim. Keep only reviews whose
-            // claim asserts the same proposition (Jev gate, same idea as cache match).
+            // claim asserts the same proposition (DeepSeek gate, same idea as cache match).
             let accepted = isMetaFactCheck ? [] : parents;
             if (parents.length > 0) {
                 const flags = await sameProposition(
@@ -1323,7 +1511,28 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
         }
     }
 
-    // Secondary fallback: Wikipedia, only when nothing supports/refutes the claim.
+    // DeepSeek web search: discovery + live content, no extra provider/key.
+    if (
+        !ctx.offline &&
+        !evidence.some((item) => item.relation === "supports" || item.relation === "refutes")
+    ) {
+        try {
+            const web = await deepSeekWebEvidence(claim, retrievedAt, seenUrls, ctx.deadline);
+            if (web.evidence.length > 0) {
+                evidence.push(...web.evidence);
+                limitations.push("Wykorzystano wyszukiwanie internetowe DeepSeek.");
+            } else if (web.context) {
+                evidence.push(web.context);
+                limitations.push(
+                    "Wyszukiwanie DeepSeek znalazło materiał, ale nie potwierdza on wprost twierdzenia.",
+                );
+            }
+        } catch (error) {
+            limitations.push(`Wyszukiwanie DeepSeek było niedostępne: ${(error as Error).message.slice(0, 120)}`);
+        }
+    }
+
+    // Secondary fallback: Wikipedia, only when search still supports/refutes nothing.
     if (!ctx.offline && !evidence.some((item) => item.relation === "supports" || item.relation === "refutes")) {
         try {
             const wiki = await wikipediaEvidence(claim, retrievedAt);
@@ -1339,7 +1548,8 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
         }
     }
 
-    // Web search: discovery only. A result must be fetched, quoted and gated by Jev.
+    // Optional Brave/Tavily fallback: discovery only. A result must be fetched,
+    // quoted and gated by DeepSeek.
     const hasSearchKey = Boolean(process.env["BRAVE_SEARCH_API_KEY"] ?? process.env["TAVILY_API_KEY"]);
     if (
         !ctx.offline &&
@@ -1403,14 +1613,7 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
     const supports = evidence.filter((item) => item.relation === "supports");
     const refutes = evidence.filter((item) => item.relation === "refutes");
 
-    // Google News links are redirects; use the publisher name for independence.
-    const supportHosts = new Set(
-        supports.map((item) =>
-            /news\.google\.com/i.test(item.url)
-                ? item.publisher.toLowerCase()
-                : hostOf(item.url),
-        ),
-    );
+    const supportHosts = new Set(supports.map((item) => hostOf(item.url)));
     const hasPrimarySupport = supports.some((item) => item.type === "primary");
 
     // Conflicting reviews: keep the strictest, but say so.
@@ -1463,7 +1666,7 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
         if (lean) {
             effectiveDecision = {
                 verdict: lean.verdict,
-                confidence: 0.3,
+                confidence: 0.55,
                 reasoning: lean.reasoning,
             };
             limitations.push("Tryb lean: brak niezależnego źródła, ocena oparta na wiedzy modelu.");
@@ -1595,7 +1798,7 @@ export async function researchClaims(
     return {
         claims: verdicts,
         sourcesUsed,
-        models: googleUsed ? [MODEL_ID] : [],
+        models: [MODEL_ID],
         costUsd,
     };
 }

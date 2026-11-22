@@ -1,4 +1,4 @@
-﻿# Ewaluacja PRAWDOWID
+# Ewaluacja PRAWDOWID
 
 Zestaw 30 przypadków i runner metryk. Wyniki trafiają do `data/eval/report.json`
 (ignorowane przez git).
@@ -56,7 +56,7 @@ Werdykty w przebiegu: confirmed 5, false 7, misleading 1, insufficient 15, not_v
 
 - Wikidata: wartości relacji (stolica, członkostwo + data, waluta, miejsca, długość, wynik wyborów),
   z porównaniem przedziałów urzędowania (`P580`/`P582`) i datą z tekstu.
-- Korpus 1164 dokumentów rządowych (`corpus/corpus.jsonl`): dopasowanie zdania + bramka Jev.
+- Korpus 1164 dokumentów rządowych (`corpus/corpus.jsonl`): dopasowanie zdania + bramka DeepSeek.
 - EUvsDisinfo: 5000 przypadków dezinformacji (lokalny snapshot).
 - Google Fact Check + Wikipedia przez rotację proxy.
 - Twarde reguły: strefa euro (ECB), kwalifikator tury wyborów, dekompozycja zdań złożonych
@@ -77,7 +77,7 @@ Werdykty w przebiegu: confirmed 5, false 7, misleading 1, insufficient 15, not_v
 Razem: cold $0,003269 → warm $0,002121 (−35,1%).
 
 Warm nie jest zerem, bo ekstrakcja claimów wykonuje się zawsze; cache pomija research
-(Google/Wikidata/Wikipedia/EUvsDisinfo) i bramki Jev. Przy długim artykule bez werdyktów
+(Google/Wikidata/Wikipedia/EUvsDisinfo) i bramki DeepSeek. Przy długim artykule bez werdyktów
 z dowodem nie ma czego zapisać, więc oszczędność spada do zera.
 
 ## Benchmark dużego cache (110 321 rekordów)

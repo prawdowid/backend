@@ -20,10 +20,10 @@ tak jak wcześniej. Zgłoszenie bez `text`, `url` i `image` kończy się
 1. **Walidacja rozmiaru.** Serwer przyjmuje `image` do 12 000 000 znaków base64
    (schema HTTP). Po zdekodowaniu limit wynosi 8 MB; większy obraz kończy się
    `status: "error"` i komunikatem, że to nie jest werdykt.
-2. **OCR.** Tekst jest odczytywany przez istniejący `DeepSeekOCRExtract`
-   (`src/modules/utils.ts`) z usługi wskazanej w `DEEPSEEK_OCR_URL`
-   (`POST` formularza z plikiem). Akceptowane jest raw base64 oraz
-   `data:<mime>;base64,` — format pliku rozpoznaje usługa OCR.
+2. **OCR.** Tekst jest odczytywany przez `DeepSeekOCRExtract`
+   (`src/modules/utils.ts`) z DeepSeek OCR: `POST /v1/tools/ocr` z tym samym
+   `DEEPSEEK_API_KEY`, którego używa czat. Akceptowane jest raw base64 oraz
+   `data:<mime>;base64,` — format pliku rozpoznaje DeepSeek.
 3. **Połączenie wejść.** Jeśli podano też `text`, treść do analizy to
    `OCR + "\n\n" + text`. Jeśli podano `url`, dokument ze strony jest pobierany
    i dołączany po tekście OCR.
@@ -34,7 +34,7 @@ tak jak wcześniej. Zgłoszenie bez `text`, `url` i `image` kończy się
    „Treść odczytana OCR. Obraz nie jest niezależnie weryfikowany; data i metadane
    mogą być nieaktualne.”
 
-Błędy OCR (brak `DEEPSEEK_OCR_URL`, błąd HTTP, pusty tekst) zwracają
+Błędy OCR (brak `DEEPSEEK_API_KEY`, błąd HTTP, pusty tekst) zwracają
 `status: "error"` z komunikatem „Nie udało się odczytać obrazu. To nie jest
 werdykt.” oraz krótkim powodem technicznym (bez URL-i i sekretów). **Błąd
 techniczny nigdy nie jest werdyktem.**
@@ -65,9 +65,9 @@ wystąpień. Wynik może być niepełny.
 
 | Aspekt | Stan |
 | --- | --- |
-| Koszt | OCR to dodatkowe wywołanie zewnętrznej usługi; nie jest wliczony w `costUsd` pipeline'u (który liczy modele ekstrakcji/researchu). |
+| Koszt | OCR to dodatkowe wywołanie DeepSeek (`/v1/tools/ocr`, rozliczane za stronę); nie jest wliczony w `costUsd` pipeline'u. |
 | Rozmiar | base64 ≤ 12M znaków w API, ≤ 8 MB po dekodowaniu. |
-| Format | Zależny od usługi OCR; UI oferuje PNG, JPEG i WebP. |
+| Format | DeepSeek OCR: PNG, JPEG, WebP, GIF, BMP, TIFF, PDF, DOC(X), PPT(X); UI oferuje PNG, JPEG i WebP. |
 | Retencja | Obraz nie jest zapisywany przez backend. W logu (`data/logs/verify.jsonl`) ląduje tylko `input.preview` — pierwsze 200 znaków OCR — i `inputKind`. |
 | Jakość | OCR myli się przy małym druku, nachyleniu, ciemnych tłach i językach mieszanych. Pusty wynik = błąd, nie „brak twierdzeń”. |
 | Zakres | Analizowany jest wyłącznie odczytany tekst. Wykresy, tabele w formie graficznej i podpisy bez tekstu mogą zostać pominięte. |
@@ -76,8 +76,8 @@ wystąpień. Wynik może być niepełny.
 ## 5. Wideo i audio
 
 - **Audio/wideo nie są częścią MVP** i nie są wymagane.
-- W repo istnieje `DeepSeek.Transcribe` (`src/modules/deepseek.ts`, DeepSeek ASR,
-  WAV PCM / Ogg Opus, limit 8 MiB), ale **nie jest podpięty** do `/verify`.
+- W repo istnieje `DeepSeekWrapper.Transcribe` (`src/modules/deepseek.ts`, DeepSeek ASR
+  `POST /v1/tools/asr`, WAV PCM / Ogg Opus, limit 8 MiB), ale **nie jest podpięty** do `/verify`.
 - Ewentualne rozszerzenie: transkrypcja → ten sam pipeline co tekst.
   Wtedy również obowiązywałaby zasada: błąd ASR to `status: "error"`, nie werdykt.
 

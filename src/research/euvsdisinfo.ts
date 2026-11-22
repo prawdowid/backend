@@ -7,9 +7,9 @@
  */
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { OpenRouterWrapper } from "../modules/openrouter";
+import { DeepSeekWrapper } from "../modules/deepseek";
 import type { Evidence, ClaimInput } from "../pipeline/types";
-import type { DecisionsNoulQuestion } from "@openrouter/sdk/models";
+import type { DecisionsNoulQuestion } from "../modules/decisions";
 
 export const EUVD_CASES_FILE = process.env["EUVD_CASES_FILE"] ??
     fileURLToPath(new URL("../../data/euvsdisinfo/cases.ndjson", import.meta.url));
@@ -237,7 +237,7 @@ async function classifyCandidates(
     });
 
     try {
-        const result = await OpenRouterWrapper.Jev(
+        const result = await DeepSeekWrapper.Decide(
             { claim: claimText, candidates },
             questions,
         );

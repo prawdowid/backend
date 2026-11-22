@@ -1,7 +1,7 @@
 /**
  * Web search adapter (Brave / Tavily) used ONLY to discover candidate pages.
  * A hit never becomes a verdict: the page is fetched, a sentence must name the
- * claim, and Jev decides supports/refutes.
+ * claim, and DeepSeek decides supports/refutes.
  */
 export type SourceTier = "A" | "B" | "C" | "D";
 

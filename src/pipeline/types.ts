@@ -105,9 +105,9 @@ export type ResearchResult = {
 export type CostBreakdown = {
     /** DeepSeek extraction (real tokens from ChatDetailed × list prices). */
     extractionUsd: number;
-    /** Jev gate + statement matching (real `usage.cost`). */
-    jevUsd: number;
-    /** Claim embeddings (chars / 3.5 token estimate × list price). */
+    /** DeepSeek gate + statement matching (real token usage). */
+    matchUsd: number;
+    /** Local hashed embeddings (free). */
     embeddingUsd: number;
 };
 

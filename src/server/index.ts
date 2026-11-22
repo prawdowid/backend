@@ -229,6 +229,8 @@ export const verificationApi = new Elysia({ name: "verification-api" })
         ok: true,
         uptimeSec: getMetrics().uptimeSec,
         version: VERSION,
+        ai: "deepseek",
+        keyConfigured: Boolean(process.env["DEEPSEEK_API_KEY"]?.trim()),
     }))
     .get("/cases", async () => {
         const cases = await listCases();
