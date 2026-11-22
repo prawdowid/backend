@@ -116,7 +116,7 @@ export function membershipEvidence(claim: ClaimInput, retrievedAt: string): Evid
     const subject = norm(fact.s);
     const object = norm(fact.o);
     const predicate = norm(fact.p);
-    const text = norm(`${claim.text} ${claim.quote ?? ""} ${claim.details ?? ""}`);
+    const text = norm(`${claim.text} ${fact.p} ${fact.o}`);
     if (!/\b(polska|poland|rzeczpospolita)\b/.test(subject)) return null;
 
     const membership =
@@ -223,6 +223,63 @@ export function electionWinnerEvidence(
     };
 }
 
+const HEAD_OF_GOVERNMENT: Record<number, { name: string; match: string[] }> = {
+    2016: { name: "Beata Szydło", match: ["szydlo", "szydło", "beata szydło"] },
+    2019: { name: "Mateusz Morawiecki", match: ["morawiecki", "mateusz morawiecki"] },
+    2020: { name: "Mateusz Morawiecki", match: ["morawiecki", "mateusz morawiecki"] },
+    2021: { name: "Mateusz Morawiecki", match: ["morawiecki", "mateusz morawiecki"] },
+    2022: { name: "Mateusz Morawiecki", match: ["morawiecki", "mateusz morawiecki"] },
+    2024: { name: "Donald Tusk", match: ["tusk", "donald tusk"] },
+    2025: { name: "Donald Tusk", match: ["tusk", "donald tusk"] },
+    2026: { name: "Donald Tusk", match: ["tusk", "donald tusk"] },
+};
+
+/**
+ * Recent Polish prime ministers by year. Only years with one holder are listed;
+ * transition years (2017, 2023) stay out to avoid guessing.
+ */
+export function headOfGovernmentEvidence(
+    claim: ClaimInput,
+    retrievedAt: string,
+): Evidence | null {
+    const fact = claim.fact;
+    if (!fact) return null;
+
+    const text = norm(
+        `${claim.text} ${claim.details ?? ""} ${claim.quote ?? ""} ${fact.p} ${fact.o}`,
+    );
+    if (!/premier|prime minister/.test(text)) return null;
+    if (!/\b(polska|poland|polski|polskie)\b/.test(text)) return null;
+
+    const year = Number(/\b(19\d{2}|20\d{2})\b/.exec(text)?.[1]);
+    const office = HEAD_OF_GOVERNMENT[year];
+    if (!office) return null;
+
+    const subject = norm(fact.s);
+    if (!subject) return null;
+
+    const relation = office.match.some(
+        (name) => subject.includes(name) || name.includes(subject),
+    )
+        ? "supports"
+        : "refutes";
+
+    return {
+        title: `Premier Polski w ${year} roku`,
+        publisher: "Wikipedia (pl)",
+        publishedAt: null,
+        retrievedAt,
+        url: "https://pl.wikipedia.org/wiki/Prezesi_Rady_Ministrów_w_Polsce",
+        excerpt:
+            `W ${year} roku premierem Polski był ${office.name}.` +
+            (relation === "refutes"
+                ? ` Twierdzenie wskazuje inną osobę (${fact.s}).`
+                : ""),
+        type: "secondary",
+        relation,
+    };
+}
+
 /**
  * One deterministic answer for the facts we can settle without search.
  * Returns null when the claim is outside these small tables.
@@ -232,7 +289,8 @@ export function commonFactEvidence(claim: ClaimInput, retrievedAt: string): Evid
         membershipEvidence(claim, retrievedAt) ??
         currencyEvidence(claim, retrievedAt) ??
         electionRoundEvidence(claim, retrievedAt) ??
-        electionWinnerEvidence(claim, retrievedAt)
+        electionWinnerEvidence(claim, retrievedAt) ??
+        headOfGovernmentEvidence(claim, retrievedAt)
     );
 }
 
@@ -245,6 +303,12 @@ export function currencyEvidence(claim: ClaimInput, retrievedAt: string): Eviden
     const subject = norm(fact.s);
     const object = norm(fact.o);
     const text = norm(claim.text);
+
+    // A normative "Poland should adopt the euro" is an opinion, not a fact.
+    if (/powinien|powinna|powinno|should|ought|nalezy|należy|trzeba|postulat/.test(text)) {
+        return null;
+    }
+
     const mentionsEuro = object.includes("euro") || text.includes("euro");
     const currencyClaim = /currency|waluta|walut/.test(norm(fact.p)) || mentionsEuro;
 

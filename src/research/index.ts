@@ -816,15 +816,22 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
     if (!ctx.offline) {
         const deterministic = commonFactEvidence(claim, retrievedAt);
         if (deterministic) {
-            const decision = decide({
-                factCheckVerdict: null,
-                independentSupports: 1,
-                hasPrimarySupport: deterministic.type === "primary",
-                supports: deterministic.relation === "supports" ? [deterministic] : [],
-                refutes: deterministic.relation === "refutes" ? [deterministic] : [],
-                hasAnyEvidence: true,
-                notVerifiable: false,
-            });
+            // A deterministic table is authoritative: one row is enough, even
+            // when the row is typed "secondary" (Wikipedia public record).
+            const decision =
+                deterministic.relation === "refutes"
+                    ? {
+                          verdict: "false" as const,
+                          confidence: 0.7,
+                          reasoning:
+                              "Deterministyczny fakt publiczny przeczy temu twierdzeniu.",
+                      }
+                    : {
+                          verdict: "confirmed" as const,
+                          confidence: deterministic.type === "primary" ? 0.8 : 0.55,
+                          reasoning:
+                              "Deterministyczny fakt publiczny potwierdza to twierdzenie.",
+                      };
             return {
                 verdict: {
                     id: claim.id,
