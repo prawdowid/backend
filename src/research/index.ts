@@ -659,6 +659,14 @@ function decide(params: {
 
     // 4. One or more matching sources without any refute.
     if (supports.length >= 1 && refutes.length === 0) {
+        if (supports.some((item) => item.type === "fact_check")) {
+            return {
+                verdict: "confirmed",
+                confidence: 0.8,
+                reasoning:
+                    "Źródło fact-checkingowe potwierdza to twierdzenie (np. sprostowanie lub weryfikacja).",
+            };
+        }
         const hasPrimary = supports.some((item) => item.type === "primary");
         if (hasPrimary) {
             return {

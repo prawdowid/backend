@@ -99,7 +99,7 @@ function score(query: Set<string>, candidate: string): number {
 async function classifyCandidates(
     claimText: string,
     candidates: Array<{ claim: string; fact: string }>,
-): Promise<Array<"same" | "contradict" | null>> {
+): Promise<Array<"supports" | "refutes" | null>> {
     if (candidates.length === 0) return [];
 
     const questions: Record<string, DecisionsNoulQuestion> = {};
@@ -115,6 +115,16 @@ async function classifyCandidates(
             },
         };
         if (candidate.fact.trim().length > 0) {
+            questions[`f${index}`] = {
+                type: "noul",
+                instructions: {
+                    question:
+                        "Does `candidate` confirm `claim`? Yes when it states the same fact, " +
+                        "even if it adds more context. Related topic or a different value is false.",
+                    claim: claimText,
+                    candidate: candidate.fact,
+                },
+            };
             questions[`x${index}`] = {
                 type: "noul",
                 instructions: {
@@ -136,11 +146,16 @@ async function classifyCandidates(
 
         return candidates.map((_candidate, index) => {
             const same = result.answers[`s${index}`];
+            const confirms = result.answers[`f${index}`];
             const contradicts = result.answers[`x${index}`];
             const pSame = same?.type === "noul" ? same.noul : 0;
+            const pConfirms = confirms?.type === "noul" ? confirms.noul : 0;
             const pContradicts = contradicts?.type === "noul" ? contradicts.noul : 0;
-            if (pSame >= 0.8) return "same";
-            if (pContradicts >= 0.8) return "contradict";
+
+            // Contradiction of the correction is the strongest signal.
+            if (pContradicts >= 0.8) return "refutes";
+            if (pConfirms >= 0.8) return "supports";
+            if (pSame >= 0.8) return "refutes";
             return null;
         });
     } catch {
@@ -185,6 +200,17 @@ export async function searchDisinfoCases(
         ranked.map(({ item }) => ({ claim: item.claim, fact: item.fact })),
     );
 
+    if (process.env["PIPELINE_DEBUG"] === "1") {
+        console.log(
+            "[euvd] ranked",
+            ranked.map((entry) => `${entry.score.toFixed(2)}:${entry.item.title.slice(0, 40)}`),
+            "relations",
+            relations,
+            "query",
+            [...query].join(","),
+        );
+    }
+
     const evidence: Evidence[] = [];
     for (let index = 0; index < ranked.length; index++) {
         const relation = relations[index];
@@ -197,9 +223,9 @@ export async function searchDisinfoCases(
             publishedAt: isoDate(item.date),
             retrievedAt,
             url: item.url,
-            excerpt: (relation === "contradict" ? item.fact : item.claim || item.fact).slice(0, 400),
+            excerpt: (item.fact || item.claim).slice(0, 400),
             type: "fact_check",
-            relation: "refutes",
+            relation,
         });
 
         if (evidence.length >= 2) break;
