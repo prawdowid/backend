@@ -367,10 +367,12 @@ function wikiGate(): Promise<void> {
 }
 
 async function wikipediaViaJina(url: string): Promise<string> {
+    const proxy = process.env["RESEARCH_PROXY_URL"];
     const response = await fetch(`https://r.jina.ai/${url}`, {
         headers: {
             accept: "text/plain",
         },
+        ...(proxy ? { proxy } : {}),
         signal: AbortSignal.timeout(20_000),
     });
 
@@ -394,11 +396,13 @@ async function wikipediaJson<T>(url: string): Promise<T> {
         return data;
     }
 
+    const proxy = process.env["RESEARCH_PROXY_URL"];
     const response = await fetch(url, {
         headers: {
             "user-agent": "PrawdowidBot/1.0 (fact-checking prototype; contact: local)",
             accept: "application/json",
         },
+        ...(proxy ? { proxy } : {}),
         signal: AbortSignal.timeout(8000),
     });
 

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { runPipeline, type CacheStore } from ".";
 import { FileCacheStore } from "./filestore";
 import { MySQLCacheStore } from "./mysqlstore";
+import { aggregateVerdicts } from "./aggregate";
 import { researchClaims } from "../research";
 import { DeepSeekOCRExtract, ReadableText } from "../modules/utils";
 import { OpenRouterWrapper } from "../modules/openrouter";
@@ -348,6 +349,7 @@ export async function verifyInput(
             },
             summary: countSummary(claims),
             claims,
+            overallVerdict: aggregateVerdicts(claims.map((claim) => claim.verdict)),
             limitations,
             timingMs: Date.now() - started,
             costUsd: (pipeline.costUsd ?? 0) + researchUsd,

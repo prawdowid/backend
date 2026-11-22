@@ -729,6 +729,14 @@
         children: [
           el("h2", { text: "Podsumowanie" }),
           el("p", { text: summaryText }),
+          data && data.overallVerdict
+            ? el("p", {
+                className: "hint",
+                text:
+                  "Werdykt całości: " +
+                  (VERDICT_LABELS[data.overallVerdict] || data.overallVerdict)
+              })
+            : null,
           data && data.input && data.input.preview
             ? el("p", { className: "hint", text: "Sprawdzono: " + data.input.preview })
             : null,

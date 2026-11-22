@@ -319,12 +319,14 @@ async function api<T>(params: Record<string, string>): Promise<T> {
         await waitTurn();
         let response: Response;
         try {
+            const proxy = process.env["RESEARCH_PROXY_URL"];
             response = await fetch(url, {
                 headers: {
                     "User-Agent": USER_AGENT,
                     "Api-User-Agent": USER_AGENT,
                     Accept: "application/json",
                 },
+                ...(proxy ? { proxy } : {}),
                 signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
             });
         } catch (error) {

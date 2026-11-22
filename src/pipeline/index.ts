@@ -119,6 +119,7 @@ RULES
 1. "q" is copied character-for-character, one contiguous passage. Never paraphrase, never translate inside it.
 2. One entry per quote. Several claims per quote are fine.
 3. One claim = one subject-predicate-object relation. Split conjunctions and counts.
+3a. If a sentence joins facts with "i", "oraz", "ale", "natomiast" or "a także", emit a separate claim for EACH conjunct. Never merge them into one claim.
 4. Only what the text says. No outside knowledge, no corrections, no invented dates.
 5. Keep hedging: source goes to "by", stance to "m". A reported claim belongs to the source, not the outlet.
 6. Resolve relative dates ("w piątek", "w sobotę", "w czwartym kwartale") to absolute "t" using "date". If impossible, omit "t".

@@ -131,6 +131,8 @@ export type VerifyResponse = {
     input: { kind: "text" | "url" | "image"; preview: string };
     summary: string;
     claims: ClaimVerdict[];
+    /** Verdict for the whole statement when it contains several claims. */
+    overallVerdict?: Verdict | null;
     limitations: string[];
     timingMs: number;
     costUsd: number;
