@@ -7,6 +7,15 @@ const EMBEDDING_MODEL =
 /** bge-m3 returns 1024-dim vectors. Change if you switch models. */
 export const EMBEDDING_DIMENSIONS = 1024;
 
+export type ChatOptions = {
+    model?: string;
+    system?: string;
+    /** Default false: DeepSeek reasons itself to death on extraction prompts. */
+    reasoning?: boolean;
+    maxTokens?: number;
+    temperature?: number;
+};
+
 export class OpenRouterWrapper {
     private static client?: OpenRouter;
 
@@ -25,6 +34,37 @@ export class OpenRouterWrapper {
         });
 
         return res;
+    }
+
+    /** Plain chat completion on OpenRouter; extraction/JSON tasks. */
+    public static async Chat(user: string, options: ChatOptions = {}): Promise<string> {
+        const res = await this.getClient().chat.send({
+            chatRequest: {
+                model:
+                    options.model ??
+                    process.env["OPENROUTER_EXTRACT_MODEL"] ??
+                    "deepseek/deepseek-v4.1-flash",
+                messages: [
+                    ...(options.system ? [{ role: "system" as const, content: options.system }] : []),
+                    { role: "user" as const, content: user },
+                ],
+                maxTokens: options.maxTokens ?? 6000,
+                temperature: options.temperature ?? 0,
+                reasoning: { enabled: options.reasoning ?? false },
+            },
+        });
+
+        const choice = res.choices[0];
+        const content = choice?.message.content;
+        const text = typeof content === "string" ? content : "";
+
+        if (process.env["PIPELINE_DEBUG"] === "1") {
+            console.log(
+                `[openrouter] model=${res.model} finish=${choice?.finishReason ?? "?"} in=${res.usage?.promptTokens ?? "?"} out=${res.usage?.completionTokens ?? "?"} reasoning=${res.usage?.completionTokensDetails?.reasoningTokens ?? 0} content=${text.length}`,
+            );
+        }
+
+        return text;
     }
 
     /** One vector for one string. */

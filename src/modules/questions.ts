@@ -17,6 +17,8 @@ export const containsStatementsQuestion: DecisionsNoulQuestion = {
 export type StatementCandidate = {
     id: string;
     text: string;
+    /** Optional metadata rendered next to the text (negation, date, source...). */
+    details?: string;
 };
 
 export type StatementCacheQuestions = {
@@ -46,7 +48,7 @@ export function createStatementCacheQuestions(
     }
 
     const criteria = Object.fromEntries(
-        candidates.map(({ id, text }) => [id, text]),
+        candidates.map(({ id, text, details }) => [id, details ? `${text} — ${details}` : text]),
     );
 
     return {
@@ -55,9 +57,9 @@ export function createStatementCacheQuestions(
             instructions: {
                 question:
                     "Does `text` make the same claim as any entry in `candidates`? " +
-                    "Answer true only for a direct meaning-level match. " +
+                    "Answer true only for a direct meaning-level match: same subject, same relation, same object, same polarity. " +
                     "Partial overlap, merely related topics, or the opposite meaning is false.",
-                candidates: candidates.map(({ text }) => text),
+                candidates: candidates.map(({ text, details }) => details ? `${text} — ${details}` : text),
             },
         },
         statementMatch: {

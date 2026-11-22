@@ -21,10 +21,20 @@ function detectAudioFormat(bytes: Uint8Array): { mime: string; ext: string } {
     throw new Error("Unsupported audio format: DeepSeek ASR accepts 16-bit PCM WAV or Ogg Opus");
 }
 
+export interface ChatOptions {
+    /** DeepSeek thinks by default; `low`/`minimal` cut latency a lot. */
+    reasoningEffort?: "minimal" | "low" | "medium" | "high";
+    /** Overrides the default system prompt. */
+    system?: string;
+}
+
 export class DeepSeek {
     private static client?: OpenAI;
 
-    public static async Chat(message: string) {
+    public static async Chat(
+        message: string,
+        options: ChatOptions = { reasoningEffort: "low" },
+    ) {
         if(this.client === undefined) {
             this.client = new OpenAI({
                 baseURL: process.env['OPENAI_BASE_URL'],
@@ -32,13 +42,27 @@ export class DeepSeek {
             });
         }
 
-        const response = await this.client.responses.create({
-            model: process.env['OPENAI_MODEL'],
-            instructions: PROMPT,
-            input: message,
+        const system = options.system ?? PROMPT;
+
+        const response = await this.client.chat.completions.create({
+            model: process.env['OPENAI_MODEL'] ?? 'deepseek-flash',
+            messages: [
+                ...(system ? [{ role: 'system' as const, content: system }] : []),
+                { role: 'user', content: message },
+            ],
+            ...(options.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
         });
-        
-        return response.output_text;
+
+        if (process.env["PIPELINE_DEBUG"] === "1") {
+            const details = response.usage?.completion_tokens_details as
+                | { reasoning_tokens?: number }
+                | undefined;
+            console.log(
+                `[deepseek] model=${response.model} prompt=${response.usage?.prompt_tokens} completion=${response.usage?.completion_tokens} reasoning=${details?.reasoning_tokens ?? 0}`,
+            );
+        }
+
+        return response.choices[0]?.message.content ?? '';
     }
 
     /**
