@@ -9,6 +9,7 @@ import { Elysia, t } from "elysia";
 import { defaultCache, verifyInput } from "../pipeline/verify";
 import { DISCLAIMER_PL, type VerifyRequest, type VerifyResponse } from "../pipeline/types";
 import { getMetrics, logVerification } from "./logger";
+import { acknowledgeCase, listCases, recordUnresolved } from "../moderation";
 
 const MAX_TEXT = 100_000;
 const VERSION = "0.1.0";
@@ -173,6 +174,15 @@ export const verificationApi = new Elysia({ name: "verification-api" })
                     console.error("[verification-api] log nie zapisany:", (error as Error).message);
                 });
 
+                // Information loop: unanswered questions are clustered and escalated later.
+                void recordUnresolved({
+                    question: response.input.preview,
+                    claims: response.claims,
+                    channel,
+                }).catch((error: unknown) => {
+                    console.error("[verification-api] pętla informacji:", (error as Error).message);
+                });
+
                 if (response.status === "error") set.status = 500;
                 return response;
             } catch (error) {
@@ -181,7 +191,7 @@ export const verificationApi = new Elysia({ name: "verification-api" })
                 set.status = 500;
 
                 const failed = errorResponse("Nie udało się wykonać sprawdzenia. To nie jest werdykt.", [
-                    message.slice(0, 300),
+                    "Błąd techniczny po stronie serwera.",
                 ], {
                     kind: url && !text ? "url" : "text",
                     preview: (url || text).slice(0, 200),
@@ -209,6 +219,24 @@ export const verificationApi = new Elysia({ name: "verification-api" })
         uptimeSec: getMetrics().uptimeSec,
         version: VERSION,
     }))
+    .get("/cases", async () => {
+        const cases = await listCases();
+        return {
+            total: cases.length,
+            open: cases.filter((item) => item.status === "open").length,
+            escalated: cases.filter((item) => item.escalated).length,
+            recommended: cases.filter((item) => item.alertReason !== null && !item.escalated).length,
+            cases,
+        };
+    })
+    .post("/cases/:id/ack", async ({ params, set }) => {
+        const acknowledged = await acknowledgeCase(params.id);
+        if (!acknowledged) {
+            set.status = 404;
+            return { error: "Nie znaleziono sprawy." };
+        }
+        return { ok: true, case: acknowledged };
+    })
     .get("/metrics", () => getMetrics())
     .get("/", async () => {
         try {

@@ -23,6 +23,8 @@ repozytorium i woła ten sam endpoint `POST /verify`.
 | POST | `/verify` | `{ text?, url?, channel? }` → `VerifyResponse` |
 | GET | `/health` | status procesu |
 | GET | `/metrics` | liczniki, p50/p95, średni koszt |
+| GET | `/cases` | nierozstrzygnięte, pogrupowane pytania |
+| POST | `/cases/:id/ack` | moderator bierze sprawę |
 | GET | `/` | interfejs WWW (PL, bez CDN) |
 | GET | `/docs` | Swagger |
 
@@ -82,6 +84,21 @@ bun run scripts/ingest-sources.ts   # zapisuje data/sources/audit.json
 
 `searchSources()` embeduje manifest partiami po 32 i zwraca top-k po cosine. Wektory żyją w pamięci
 procesu; przy awarii embeddingów zwraca `[]` zamiast wywalać weryfikację.
+
+### Pętla informacji
+
+Nierozstrzygnięte twierdzenia (`insufficient_evidence`, `not_verifiable`) trafiają do
+`data/moderation/cases.json`. Nowe pytanie jest embedowane i dołączane do najbliższej otwartej
+sprawy (cosine ≥ 0.82), a identyczne pytanie trafia do sprawy bez dodatkowego kosztu.
+
+Przy 3. zgłoszeniu tej samej sprawy system raz wysyła alert:
+
+- zawsze zapisuje go do `data/alerts/alerts.jsonl`,
+- jeśli ustawisz `MODERATOR_WEBHOOK_URL`, robi `POST` z JSON-em i dopiero wtedy `escalated: true`,
+- bez webhooka sprawa zostaje `open` z jawnym `alertReason` „Rekomendacja przekazania…” —
+  system nie twierdzi, że przekazał sprawę, jeśli tego nie zrobił.
+
+`GET /cases` pokazuje `open`, `escalated` i `recommended` osobno; `POST /cases/:id/ack` zamyka sprawę.
 
 ## Bezpieczeństwo
 
