@@ -253,22 +253,51 @@ async function extractClaims(
     const claims: Claim[] = [];
     const seen = new Set<string>();
 
-    for (const fact of parsed.facts ?? []) {
-        for (const relation of fact.c ?? []) {
-            if (!relation.s || !relation.p || relation.o === undefined) continue;
+    const consume = (data: Summarize): void => {
+        for (const fact of data.facts ?? []) {
+            for (const relation of fact.c ?? []) {
+                if (!relation.s || !relation.p || relation.o === undefined) continue;
 
-            const key = claimKey(relation);
-            if (seen.has(key)) continue;
-            seen.add(key);
+                const key = claimKey(relation);
+                if (seen.has(key)) continue;
+                seen.add(key);
 
-            claims.push({
-                id: key.slice(0, 16),
-                key,
-                text: claimText(relation),
-                quote: fact.q,
-                details: claimDetails(relation),
-                fact: relation,
-            });
+                claims.push({
+                    id: key.slice(0, 16),
+                    key,
+                    text: claimText(relation),
+                    quote: fact.q,
+                    details: claimDetails(relation),
+                    fact: relation,
+                });
+            }
+        }
+    };
+
+    consume(parsed);
+
+    // Compound sentence guard: if the text has conjunctions but extraction
+    // merged them, re-extract each clause with the leading subject carried over.
+    const clauses = safeText
+        .split(/\s+(?:i|oraz|ale|natomiast)\s+/i)
+        .map((clause) => clause.trim())
+        .filter((clause) => clause.length > 0);
+
+    if (clauses.length >= 2 && clauses.length <= 3 && claims.length < clauses.length) {
+        const subject = claims[0]?.fact.s;
+        for (const clause of clauses.slice(1)) {
+            const clauseText = subject ? `${subject} ${clause}` : clause;
+            try {
+                const extraResponse = await OpenRouterWrapper.ChatDetailed(
+                    `<ARTICLE>\n${clauseText}\n</ARTICLE>`,
+                    { system: MASTERPROMPT, reasoning: false, maxTokens: 4000 },
+                );
+                promptTokens += extraResponse.promptTokens;
+                completionTokens += extraResponse.completionTokens;
+                consume(JSON.parse(stripFence(extraResponse.text)) as Summarize);
+            } catch {
+                // A failed clause must not break extraction of the whole text.
+            }
         }
     }
 
