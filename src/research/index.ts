@@ -18,6 +18,7 @@ import { searchSources } from "../sources";
 import { searchDisinfoCases } from "./euvsdisinfo";
 import { searchWeb } from "./search";
 import { wikidataEvidence } from "./wikidata";
+import { currencyEvidence } from "./facts";
 import { searchCorpusDocuments } from "./corpus-docs";
 import { fetchWithProxy } from "../modules/proxy";
 import type {
@@ -931,6 +932,19 @@ async function researchOne(
             }
         } catch {
             limitations.push("Dostęp do Google Fact Check był ograniczony.");
+        }
+    }
+
+    // Deterministic common-fact check (Eurozone membership / currency).
+    if (
+        !ctx.offline &&
+        !evidence.some((item) => item.relation === "supports" || item.relation === "refutes")
+    ) {
+        const currency = currencyEvidence(claim, retrievedAt);
+        if (currency) {
+            seenUrls.add(currency.url.toLowerCase());
+            evidence.push(currency);
+            limitations.push("Sprawdzono przynależność do strefy euro.");
         }
     }
 

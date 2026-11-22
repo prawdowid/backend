@@ -333,6 +333,21 @@ export async function verifyInput(
 
         const sourcesUsed = [...new Set(claims.flatMap((claim) => claim.evidence.map((e) => e.url)))];
         const limitations = [...new Set(claims.flatMap((claim) => claim.limitations))];
+
+        // A confirmed core with an omitted election-round qualifier is partial truth.
+        const roundQualifier =
+            /\b(pierwsz\w*|drug\w*)\s+tur\w*/iu.test(content) ||
+            /\b(first|second)\s+round\b/i.test(content);
+        if (roundQualifier) {
+            for (const claim of claims) {
+                if (claim.verdict === "confirmed" && !/\btur\w*|\bround\b/i.test(claim.claim)) {
+                    claim.verdict = "misleading";
+                    claim.reasoning +=
+                        " Twierdzenie pomija kwalifikator tury wyborów, więc jest tylko częściowo prawdziwe.";
+                    claim.limitations.push("Pominięto kwalifikator: tura wyborów.");
+                }
+            }
+        }
         if (hasImage) limitations.unshift(IMAGE_LIMITATION);
         if (pipeline.injectionSuspected) {
             limitations.push(
