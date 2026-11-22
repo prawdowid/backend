@@ -15,11 +15,10 @@ Przyczyna: `docker-compose.yml` ma serwis `frontend` z `build.context: ../fronte
 Coolify klonuje **tylko jedno repo** (tu: backend) do katalogu `/artifacts/<uuid>`,
 więc katalogu `../frontend` tam nie ma i budowanie kontekstu wywala cały compose.
 
-Rozwiązanie: backend ma własny plik `docker-compose.coolify.yml` z **jednym**
-serwisem (`backend`), a frontend jest **drugą aplikacją** w Coolify, zbudowaną
-ze swojego repo (`prawdowid/frontend`) i własnego `Dockerfile`.
-Plik `docker-compose.yml` zostaje bez zmian — dalej służy do lokalnego
-`docker compose up --build` z oboma serwisami obok siebie.
+Rozwiązanie: `docker-compose.yml` w tym repo ma teraz **tylko** serwis
+`backend` (bez `../frontend`), a frontend jest **drugą aplikacją** w Coolify,
+zbudowaną ze swojego repo (`prawdowid/frontend`) i własnego `Dockerfile`.
+Lokalnie ten compose uruchamia sam backend; frontend odpalasz osobno.
 
 ## 2. Architektura po wdrożeniu
 
@@ -49,11 +48,8 @@ Nowa aplikacja w Coolify, typ **Docker Compose** (nie „Nixpacks”, nie „Doc
 | Branch | `main` |
 | Build Pack | **Docker Compose** |
 | Base Directory | `/` |
-| Docker Compose Location | `/docker-compose.coolify.yml` |
+| Docker Compose Location | `/docker-compose.yml` (domyślny) |
 | Port aplikacji / port domeny | `3000` |
-
-Nazwa pliku jest istotna: **nie** zostawiaj domyślnego `/docker-compose.yml`,
-bo wróci błąd z punktu 1.
 
 ### Domena i port
 
@@ -82,8 +78,8 @@ stan (cache, metryki, sprawy) poleci od zera.
 
 ### Zmienne środowiskowe
 
-Plik `.env` **nie jest commitowany** i nie jest używany przez
-`docker-compose.coolify.yml`. Wszystkie zmienne ustawiasz w zakładce
+Plik `.env` **nie jest commitowany** i nie jest używany przez compose.
+Wszystkie zmienne ustawiasz w zakładce
 *Environment Variables* aplikacji Coolify; Coolify wstrzykuje je przy starcie
 kontenera. Dzięki temu konfiguracja nie zależy od składni `env_file` dostępnej
 dopiero w nowszych wydaniach Docker Compose.
@@ -168,7 +164,7 @@ projektu compose.
 
 Kroki:
 
-1. W `docker-compose.coolify.yml` (backend) dodaj do serwisu:
+1. W `docker-compose.yml` (backend) dodaj do serwisu:
 
    ```yaml
        container_name: prawdowid-backend
@@ -198,7 +194,7 @@ wróć do wariantu A, to nie jest awaria, tylko inny (równie poprawny) sposób.
 
 ## 6. Kolejność wdrożenia
 
-1. Wdróż **backend** (`docker-compose.coolify.yml`), ustaw env, domenę,
+1. Wdróż **backend** (`docker-compose.yml`), ustaw env, domenę,
    poczekaj aż healthcheck będzie zielony.
 2. Sprawdź z zewnątrz: `curl -i https://api.prawdowid.org/health` → `200`.
 3. Wdróż **frontend** z `BACKEND_API_URL=https://api.prawdowid.org`.
@@ -209,9 +205,9 @@ wróć do wariantu A, to nie jest awaria, tylko inny (równie poprawny) sposób.
 
 | Objaw | Przyczyna | Co zrobić |
 | --- | --- | --- |
-| `path "/artifacts/frontend" not found` | Coolify buduje `docker-compose.yml` z serwisem `frontend` | ustaw Docker Compose Location na `/docker-compose.coolify.yml` |
+| `path "/artifacts/frontend" not found` | Coolify buduje stary compose z serwisem `frontend` | zaktualizuj repo do commita z single-service `docker-compose.yml` |
 | build OK, kontener restartuje się w pętli | brak wymaganych env (klucze API) albo zły `PORT` | sprawdź zmienne w UI i logi; `PORT` musi być `3000` |
-| `EACCES: permission denied, open '/app/data/...'` | `data` jako bind mount `./data` na klonie bez tego katalogu | używaj wariantu z `docker-compose.coolify.yml` (nazwany wolumen) |
+| `EACCES: permission denied, open '/app/data/...'` | `data` jako bind mount `./data` na klonie bez tego katalogu | używaj named volume z `docker-compose.yml` |
 | frontend: 502 z `/api/analyze` | zły `BACKEND_API_URL` albo backend nie odpowiada | `curl https://api.prawdowid.org/health`; potem popraw env i zrób **rebuild** frontendu |
 | przeglądarka: CORS error | `NEXT_PUBLIC_ANALYSIS_API_URL` wskazuje bezpośrednio na API | ustaw `/api/analyze` i przebuduj frontend; albo dopisz origin do `CORS_ORIGINS` |
 | zmiana `NEXT_PUBLIC_*` nie działa | to build arg, nie runtime env | wymuś rebuild bez cache |
