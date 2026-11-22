@@ -117,6 +117,18 @@ mysql -u user -p prawdowid < sql/schema.sql
   kontrakt `CacheStore` się nie zmienia,
 - dokumenty źródłowe i dowody mają osobne tabele (`documents`, `evidence`) pod audyt i eksport.
 
+**Newsy trzymamy w MySQL, nie w Redisie.** Redis to warstwa ulotna: hot-cache werdyktów, locki
+`SET NX PX`, rate limit, kolejka rechecków (ZSET). Wyłączenie Redisa ma spowolnić system, nie zmienić
+wyniku. Zasady dla `documents`:
+
+- dokument to **niezmienna wersja**: `(source_id, content_hash)` unique, a ten sam `canonical_url`
+  z nową treścią to nowy wiersz (`fetched_at`), nie nadpisanie,
+- pełny tekst tylko dla dokumentów urzędowych/publicznych z jasną licencją,
+- dla newsów i mediów: `excerpt` (≤1500 znaków) + metadane + `content_hash` + link — bez
+  redystrybucji całego artykułu,
+- bez `FULLTEXT` na te 24h: `LIKE` po `title`/`excerpt` + embeddingi wystarczą; `FULLTEXT ... WITH PARSER ngram`
+  dopiero, gdy recall zacznie zawodzić (polska odmiana i diakrytyki).
+
 ## Bezpieczeństwo
 
 - treść użytkownika jest **danymi** w `<ARTICLE>`; MASTERPROMPT zabrania wykonywania instrukcji z treści,

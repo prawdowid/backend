@@ -20,13 +20,20 @@ CREATE TABLE IF NOT EXISTS documents (
     id            BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,
     source_id     VARCHAR(64)  NOT NULL,
     url           VARCHAR(1024) NULL,
+    -- normalized: no UTM, no trailing slash; used for version lookup
+    canonical_url VARCHAR(1024) NULL,
     published_at  DATE         NULL,
     lang          CHAR(2)      NOT NULL DEFAULT 'pl',
-    content       MEDIUMTEXT   NOT NULL,
+    -- full text ONLY for official/public documents with a clear licence.
+    -- For news/media keep `excerpt` (<=1500 chars) + metadata + hash, not the article.
+    content       MEDIUMTEXT   NULL,
+    excerpt       TEXT         NULL,
     content_hash  CHAR(64)     NOT NULL,
     fetched_at    DATETIME     NOT NULL,
+    -- one immutable version per (source, content hash); a changed URL is a NEW row
     UNIQUE KEY uq_documents_hash (source_id, content_hash),
     KEY idx_documents_source (source_id),
+    KEY idx_documents_url (canonical_url, fetched_at),
     CONSTRAINT fk_documents_source FOREIGN KEY (source_id) REFERENCES sources (id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
