@@ -123,6 +123,12 @@ RULES
 3. One claim = one subject-predicate-object relation. Split conjunctions and counts.
 3a. If a sentence joins facts with "i", "oraz", "ale", "natomiast" or "a także", emit a separate claim for EACH conjunct. Never merge them into one claim.
 4. Only what the text says. No outside knowledge, no corrections, no invented dates.
+4a. QUESTION INPUT: if <ARTICLE> is a question (starts with "Czy", "Does", "Is", "Did", "Czyżby" or ends with "?"), do NOT answer it. Extract the proposition the question asks about as one claim, with the asked value in "o". Keep "q" as the exact question text.
+    "Czy Wrocław wydaje na komunikację 700 mln zł?" -> {"s":"Wrocław","p":"spending_on_transport","o":"700 mln zł"}
+    "Czy Polska przyjęła euro w 2010?" -> {"s":"Polska","p":"adopted_currency","o":"euro w 2010"}
+    "Czy Demagog sprawdził tezę X?" -> {"s":"Demagog","p":"fact_checked","o":"X"}
+    "Czy ten film pokazywał protest w 2026?" -> {"s":"film","p":"shows_event","o":"protest w 2026"}
+    A question is in scope even though it asserts nothing. Never emit an answer as a claim.
 5. Keep hedging: source goes to "by", stance to "m". A reported claim belongs to the source, not the outlet.
 6. Resolve relative dates ("w piątek", "w sobotę", "w czwartym kwartale") to absolute "t" using "date". If impossible, omit "t".
 7. Canonical entity names in "s"/"o"; spelling variants are the same entity.
@@ -135,7 +141,7 @@ numbers and dates, surprising or disputed details, named attributions.
 DROP: history and encyclopedic background, technical specs, production provenance,
 procedures and paperwork, unit names and ranks, routine actions, colour, restatements.
 
-MAX 8 claims per article. If more survive, keep the ones closest to the headline.
+MAX 12 claims per message. If more survive, keep the ones closest to the headline.
 Never drop: locations, dates, counts, who did what, quoted statements, contradictions.
 9. Omit every null/empty field. No ids, no type fields, no aliases, no entity list.
 10. "tr" only when the quote is not Polish.
@@ -261,8 +267,23 @@ async function extractClaims(
             const quoteNorm = normalize(fact.q ?? "");
             if (quoteNorm.length >= 10 && !articleNorm.includes(quoteNorm)) continue;
 
-            for (const relation of fact.c ?? []) {
-                if (!relation.s || !relation.p || relation.o === undefined) continue;
+            for (const rawRelation of fact.c ?? []) {
+                if (!rawRelation.s || !rawRelation.p || rawRelation.o === undefined) continue;
+
+                // Questions often carry the date inside the object ("NATO od 1999",
+                // "euro w 2010"). Move it into `t` so temporal checks still work.
+                const relation: ClaimFact = { ...rawRelation };
+                if (typeof relation.o === "string") {
+                    let object = relation.o.trim().replace(/^(czy|że)\s+/i, "");
+                    const since = /^(.*?)\s+(?:od|since)\s+(\d{4})(?:\s+roku)?$/i.exec(object);
+                    const inYear = /^(.*?)\s+w\s+(\d{4})(?:\s+roku)?$/i.exec(object);
+                    const match = since ?? inYear;
+                    if (match) {
+                        object = match[1]!.trim();
+                        relation.t ??= match[2]!;
+                    }
+                    relation.o = object;
+                }
 
                 const key = claimKey(relation);
                 if (seen.has(key)) continue;

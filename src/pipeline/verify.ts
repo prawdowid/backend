@@ -84,6 +84,25 @@ function pluralPl(n: number, one: string, few: string, many: string): string {
     return many;
 }
 
+function isQuestion(text: string): boolean {
+    return /^\s*(czy|czyżby|does|do|did|is|are|was|were|has|have|can|could|will|would|should)\b/iu.test(
+        text,
+    ) || /\?\s*$/.test(text);
+}
+
+function isYesNoQuestion(text: string): boolean {
+    return /^\s*(czy|czyżby|does|do|did|is|are|was|were|has|have|can|could|will|would|should)\b/iu.test(
+        text,
+    );
+}
+
+function primaryLink(claim: ClaimVerdict): string | null {
+    const decisive =
+        claim.evidence.find((item) => item.relation === "refutes") ??
+        claim.evidence.find((item) => item.relation === "supports");
+    return decisive?.url ?? null;
+}
+
 function countSummary(claims: ClaimVerdict[]): string {
     if (claims.length === 0) return "Nie znaleziono twierdzeń, które dałoby się sprawdzić.";
     const counts = new Map<string, number>();
@@ -103,6 +122,35 @@ function countSummary(claims: ClaimVerdict[]): string {
     }
     const noun = pluralPl(claims.length, "twierdzenie", "twierdzenia", "twierdzeń");
     return `Sprawdzono ${claims.length} ${noun}: ${parts.join(", ")}.`;
+}
+
+/**
+ * A question gets a direct answer, not a list of claim statistics. The verdict
+ * classes stay the same; only the phrasing changes.
+ */
+export function buildSummary(claims: ClaimVerdict[], input: string): string {
+    if (!isQuestion(input) || claims.length !== 1) return countSummary(claims);
+
+    const claim = claims[0]!;
+    const link = primaryLink(claim);
+    const suffix = link ? ` Źródło: ${link}` : "";
+    const yesNo = isYesNoQuestion(input);
+
+    switch (claim.verdict) {
+        case "confirmed":
+            return `${yesNo ? "Tak." : "Potwierdzone."} ${claim.reasoning}${suffix}`;
+        case "false":
+            return `${yesNo ? "Nie." : "Fałszywe."} ${claim.reasoning}${suffix}`;
+        case "misleading":
+            return `${yesNo ? "Nie w pełni." : "Wprowadzające w błąd."} ${claim.reasoning}${suffix}`;
+        case "insufficient_evidence":
+            return (
+                "Nie udało mi się potwierdzić tej informacji. " +
+                `${claim.reasoning}${suffix}`
+            );
+        case "not_verifiable":
+            return `Tego nie da się rozstrzygnąć na podstawie dostępnych źródeł. ${claim.reasoning}`;
+    }
 }
 
 export async function verifyInput(
@@ -362,7 +410,7 @@ export async function verifyInput(
                 kind: inputKind,
                 preview: inputPreview,
             },
-            summary: countSummary(claims),
+            summary: buildSummary(claims, text || url || ""),
             claims,
             overallVerdict: aggregateVerdicts(claims.map((claim) => claim.verdict)),
             limitations,

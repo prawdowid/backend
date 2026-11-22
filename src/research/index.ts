@@ -754,7 +754,46 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
     };
 }
 
-async function researchOne(
+    const LEAN_MODE = process.env["VERDICT_MODE"] === "lean";
+
+    async function leanKnowledgeVerdict(
+        target: ClaimInput,
+    ): Promise<{ verdict: "confirmed" | "false"; reasoning: string } | null> {
+        try {
+            const raw = await OpenRouterWrapper.Chat(
+                `Claim: "${target.text}"\n` +
+                    'Answer only JSON: {"verdict":"true"|"false"|"unknown","confidence":0..1}. ' +
+                    "Use general knowledge. If unsure, answer unknown. Never guess.",
+                {
+                    system: "You are a careful fact-checker. Prefer unknown over a guess.",
+                    reasoning: false,
+                    maxTokens: 120,
+                },
+            );
+            const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "");
+            const parsed = JSON.parse(cleaned) as { verdict?: string; confidence?: number };
+            if ((parsed.confidence ?? 0) < 0.7) return null;
+            if (parsed.verdict === "true") {
+                return {
+                    verdict: "confirmed",
+                    reasoning:
+                        "Tryb lean: ocena oparta na wiedzy modelu, bez niezależnego źródła. Traktuj jako wskazówkę, nie dowód.",
+                };
+            }
+            if (parsed.verdict === "false") {
+                return {
+                    verdict: "false",
+                    reasoning:
+                        "Tryb lean: ocena oparta na wiedzy modelu, bez niezależnego źródła. Traktuj jako wskazówkę, nie dowód.",
+                };
+            }
+            return null;
+        } catch {
+            return null;
+        }
+    }
+
+    async function researchOne(
     claim: ClaimInput,
     ctx: { offline: boolean; asOf: string; deadline: number },
 ): Promise<OneClaimResult> {
@@ -874,12 +913,31 @@ async function researchOne(
         limitations.push("Tryb offline — pominięto Google Fact Check.");
     } else {
         const fact = claim.fact;
-        const queries = [
-            claim.text,
-            fact ? `${fact.s} ${fact.o}` : "",
-            fact ? `${fact.s} ${fact.p.replace(/_/g, " ")} ${fact.o}` : "",
-            fact ? `${fact.s}` : "",
-        ]
+        const isMetaFactCheck = /fact.?check|sprawdz/i.test(fact?.p ?? "");
+        const metaSubject = (fact?.s ?? "").toLowerCase();
+        const metaTarget = String(fact?.o ?? "").trim();
+        const publisherSites: Record<string, string> = {
+            demagog: "demagog.org.pl",
+            pap: "pap.pl",
+            afp: "afp.com",
+            sprawdzam: "sprawdzam.afp.com",
+            konkret24: "konkret24.tvn24.pl",
+            "fake hunter": "fakehunter.pap.pl",
+        };
+        const publisherSite = Object.entries(publisherSites).find(([name]) =>
+            metaSubject.includes(name),
+        )?.[1];
+
+        const queries = (
+            isMetaFactCheck
+                ? [metaTarget]
+                : [
+                      claim.text,
+                      fact ? `${fact.s} ${fact.o}` : "",
+                      fact ? `${fact.s} ${fact.p.replace(/_/g, " ")} ${fact.o}` : "",
+                      fact ? `${fact.s}` : "",
+                  ]
+        )
             .map((query) => query.trim())
             .filter((query, index, all) => query.length > 0 && all.indexOf(query) === index)
             .slice(0, 3);
@@ -892,6 +950,9 @@ async function researchOne(
                 const response = await GoogleFactCheck.Search(query, {
                     languageCode: "pl",
                     pageSize: GOOGLE_PAGE_SIZE,
+                    ...(isMetaFactCheck && publisherSite
+                        ? { reviewPublisherSiteFilter: publisherSite }
+                        : {}),
                 });
                 googleUsed = true;
 
@@ -909,9 +970,57 @@ async function researchOne(
                 if (parents.length >= 8) break;
             }
 
+            if (isMetaFactCheck) {
+                // The question is "did <publisher> check <claim>?", so the review
+                // itself is the evidence. Do not compare it to the meta-claim.
+                let added = 0;
+                for (const parent of parents) {
+                    for (const review of parent.claimReview ?? []) {
+                        if (!review.url) continue;
+                        const publisherName = review.publisher?.name ?? "";
+                        const site = review.publisher?.site ?? "";
+                        const matches =
+                            (publisherSite && site.includes(publisherSite)) ||
+                            (metaSubject.length > 0 &&
+                                publisherName.toLowerCase().includes(metaSubject));
+                        if (!matches) continue;
+
+                        const key = review.url.toLowerCase();
+                        if (seenUrls.has(key)) continue;
+                        seenUrls.add(key);
+                        evidence.push({
+                            title: review.title || `Fact-check: ${publisherName}`,
+                            publisher: publisherName || hostOf(review.url),
+                            publishedAt: review.reviewDate?.slice(0, 10) ?? null,
+                            retrievedAt,
+                            url: review.url,
+                            excerpt:
+                                `Recenzja: ${parent.text} — ocena: ${review.textualRating}.` +
+                                (review.title ? ` Tytuł: ${review.title}.` : ""),
+                            type: "fact_check",
+                            relation: "supports",
+                        });
+                        added += 1;
+                        if (added >= 2) break;
+                    }
+                    if (added >= 2) break;
+                }
+
+                if (added === 0) {
+                    limitations.push(
+                        `Brak recenzji ${fact?.s ?? "wybranego wydawcy"} dla tej tezy. ` +
+                            "Brak wyniku nie oznacza, że wydawca tego nie sprawdzał.",
+                    );
+                } else {
+                    limitations.push(
+                        `Znaleziono recenzję fact-checkingową wydawcy ${fact?.s ?? ""}.`.trim(),
+                    );
+                }
+            }
+
             // A search hit is not a review of *this* claim. Keep only reviews whose
             // claim asserts the same proposition (Jev gate, same idea as cache match).
-            let accepted = parents;
+            let accepted = isMetaFactCheck ? [] : parents;
             if (parents.length > 0) {
                 const flags = await sameProposition(
                     claim.text,
@@ -1164,9 +1273,27 @@ async function researchOne(
         forecast: isForecast,
     });
 
+    let effectiveDecision = decision;
+    if (
+        LEAN_MODE &&
+        decision.verdict === "insufficient_evidence" &&
+        supports.length === 0 &&
+        refutes.length === 0
+    ) {
+        const lean = await leanKnowledgeVerdict(claim);
+        if (lean) {
+            effectiveDecision = {
+                verdict: lean.verdict,
+                confidence: 0.3,
+                reasoning: lean.reasoning,
+            };
+            limitations.push("Tryb lean: brak niezależnego źródła, ocena oparta na wiedzy modelu.");
+        }
+    }
+
     // Rule: a lone non-primary support does not confirm — demote it to context.
     let finalEvidence = evidence;
-    if (decision.verdict === "insufficient_evidence" && supports.length === 1 && refutes.length === 0) {
+    if (effectiveDecision.verdict === "insufficient_evidence" && supports.length === 1 && refutes.length === 0) {
         const lone = supports[0]!;
         if (lone.type !== "primary") {
             finalEvidence = evidence.map((item) =>
@@ -1188,10 +1315,10 @@ async function researchOne(
     const verdict: ClaimVerdict = {
         id: claim.id,
         claim: claimTextFor(claim),
-        verdict: decision.verdict,
-        confidence: roundConfidence(decision.confidence),
-        strength: strengthOf(roundConfidence(decision.confidence)),
-        reasoning: decision.reasoning,
+        verdict: effectiveDecision.verdict,
+        confidence: roundConfidence(effectiveDecision.confidence),
+        strength: strengthOf(roundConfidence(effectiveDecision.confidence)),
+        reasoning: effectiveDecision.reasoning,
         evidence: finalEvidence,
         limitations: [...new Set(limitations)],
         asOf: ctx.asOf,
