@@ -22,6 +22,46 @@ export async function Markdown(url: string): Promise<string> {
     return await response.text();
 }
 
+/**
+ * Reads a page as plain text. Prefers Jina Reader (clean markdown); if Jina
+ * rejects the URL, falls back to a direct fetch with a browser user-agent.
+ */
+export async function ReadableText(url: string): Promise<string> {
+    try {
+        return await Markdown(url);
+    } catch {
+        const response = await fetch(url, {
+            headers: {
+                "user-agent":
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                accept: "text/html,application/xhtml+xml;q=0.8,*/*;q=0.5",
+            },
+            redirect: "follow",
+            signal: AbortSignal.timeout(8000),
+        });
+
+        if (!response.ok) {
+            throw new Error(`Nie udało się pobrać strony (${response.status}).`);
+        }
+
+        const html = await response.text();
+        return html
+            .replace(/<script[\s\S]*?<\/script>/gi, " ")
+            .replace(/<style[\s\S]*?<\/style>/gi, " ")
+            .replace(/<\/(p|div|h[1-6]|li|tr|section|article|blockquote)>/gi, "\n")
+            .replace(/<br\s*\/?>/gi, "\n")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/&nbsp;/g, " ")
+            .replace(/&amp;/g, "&")
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;|&apos;/g, "'")
+            .replace(/[ \t]+/g, " ")
+            .replace(/\n{3,}/g, "\n\n")
+            .trim()
+            .slice(0, 100_000);
+    }
+}
+
 export interface OCRResponse {
     text: string[]; // empty if no readable text
     confidence: number | null;

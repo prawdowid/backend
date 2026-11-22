@@ -33,6 +33,8 @@ const CORPUS_MIN_SCORE = 0.45;
 const CONTENT_FETCH_LIMIT = 3;
 /** Markdown() has no AbortSignal, so we race it against this budget. */
 const CONTENT_FETCH_TIMEOUT_MS = 4000;
+/** Total wall-clock budget for page fetches across one request. */
+const RESEARCH_FETCH_BUDGET_MS = 12_000;
 /** A page can be a book; the matcher only needs the beginning. */
 const CONTENT_MAX_CHARS = 20_000;
 const GOOGLE_PAGE_SIZE = 5;
@@ -266,9 +268,16 @@ function excerptFromContent(content: string, claim: ClaimInput): string {
     return truncate(best ?? body);
 }
 
-function relationForMatch(claim: ClaimInput): EvidenceRelation {
-    // Never "supports" a negation: the page asserts the opposite.
-    return claim.fact?.neg === true ? "refutes" : "supports";
+function sentenceNegated(sentence: string): boolean {
+    return /\b(nie|nigdy|brak)\b/.test(normalizeText(sentence));
+}
+
+function relationForMatch(claim: ClaimInput, sentence: string): EvidenceRelation {
+    const claimNegated = claim.fact?.neg === true;
+    const pageNegated = sentenceNegated(sentence);
+    // Same polarity = supports; opposite = refutes. This is what stops
+    // "Polska nie przyjęła euro" from confirming "Polska przyjęła euro".
+    return claimNegated === pageNegated ? "supports" : "refutes";
 }
 
 // ---------------------------------------------------------------------------
@@ -313,7 +322,7 @@ function evidenceFromContent(
     return {
         ...base,
         excerpt: match ? match.slice(0, 400) : excerptFromContent(content, claim),
-        relation: match ? relationForMatch(claim) : "context",
+        relation: match ? relationForMatch(claim, match) : "context",
     };
 }
 
@@ -460,7 +469,7 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
 
 async function researchOne(
     claim: ClaimInput,
-    ctx: { offline: boolean; asOf: string },
+    ctx: { offline: boolean; asOf: string; deadline: number },
 ): Promise<OneClaimResult> {
     const limitations: string[] = [];
     const evidence: Evidence[] = [];
@@ -481,11 +490,18 @@ async function researchOne(
         (hit) => Number.isFinite(hit.score) && hit.score >= CORPUS_MIN_SCORE,
     );
 
-    // Read the actual pages for the best hits; only verified docs, only online.
+    // Read the actual pages for the best hits; only verified docs, only online,
+    // and only while the request-wide fetch budget is not exhausted.
     const pages = new Map<string, string>();
-    const toFetch = ctx.offline
-        ? []
-        : eligible.filter((hit) => hit.doc.verified === true).slice(0, CONTENT_FETCH_LIMIT);
+    const withinBudget = Date.now() < ctx.deadline;
+    const toFetch =
+        ctx.offline || !withinBudget
+            ? []
+            : eligible.filter((hit) => hit.doc.verified === true).slice(0, CONTENT_FETCH_LIMIT);
+
+    if (!ctx.offline && !withinBudget) {
+        limitations.push("Przekroczono limit czasu pobierania treści źródeł; użyto metadanych.");
+    }
 
     if (toFetch.length > 0) {
         const fetched = await Promise.allSettled(toFetch.map((hit) => fetchPageText(hit.doc.url)));
@@ -642,6 +658,7 @@ export async function researchClaims(
 
     const offline = options.offline === true;
     const asOf = normalizeAsOf(options.asOf);
+    const deadline = Date.now() + RESEARCH_FETCH_BUDGET_MS;
     const cap =
         typeof options.maxClaims === "number" && options.maxClaims >= 0
             ? Math.floor(options.maxClaims)
@@ -661,7 +678,7 @@ export async function researchClaims(
         }
 
         try {
-            const result = await researchOne(claim, { offline, asOf });
+            const result = await researchOne(claim, { offline, asOf, deadline });
             if (result.googleUsed) googleUsed = true;
             verdicts.push(result.verdict);
         } catch {

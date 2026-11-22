@@ -1,130 +1,154 @@
-# Ewaluacja PRAWDOWID
+﻿# Ewaluacja PRAWDOWID
 
-Zestaw 30 przypadków i runner, który mierzy, czy system faktycznie wydaje werdykty
-zgodne z oczekiwaniami — a nie tylko czy odpowiada.
+Zestaw 30 przypadkÃ³w i runner, ktÃ³ry mierzy, czy system faktycznie wydaje werdykty
+zgodne z oczekiwaniami â€” a nie tylko czy odpowiada.
 
 Pliki:
 
 | plik | rola |
 |---|---|
-| `data/eval/cases.json` | 30 przypadków (8 kategorii) z oczekiwanym werdyktem |
-| `scripts/eval.ts` | runner: woła system, liczy metryki, zapisuje `data/eval/report.json` |
-| `scripts/eval-report.ts` | czyta raport i drukuje zwięzły markdown |
+| `eval/cases.json` | 30 przypadkÃ³w (8 kategorii) z oczekiwanym werdyktem |
+| `scripts/eval.ts` | runner: woÅ‚a system, liczy metryki, zapisuje `data/eval/report.json` |
+| `scripts/eval-report.ts` | czyta raport i drukuje zwiÄ™zÅ‚y markdown |
 | `data/eval/report.json` | wynik ostatniego przebiegu (generowany) |
 
 ## Uruchomienie
 
 ```bash
-# 1. Bezpośrednio verifyInput (domyślnie, szybciej — bez HTTP)
+# 1. BezpoÅ›rednio verifyInput (domyÅ›lnie, szybciej â€” bez HTTP)
 bun run scripts/eval.ts
 
-# 2. Przez działający serwer (sprawdza też walidację HTTP i statusy)
+# 2. Przez dziaÅ‚ajÄ…cy serwer (sprawdza teÅ¼ walidacjÄ™ HTTP i statusy)
 bun run dev   # w drugim terminalu
 EVAL_BASE_URL=http://localhost:3000 bun run scripts/eval.ts
 
-# 3. Podsumowanie do README / slajdów
+# 3. Podsumowanie do README / slajdÃ³w
 bun run scripts/eval-report.ts
 ```
 
 Zmienne (wszystkie opcjonalne):
 
-| zmienna | domyślnie | znaczenie |
+| zmienna | domyÅ›lnie | znaczenie |
 |---|---|---|
-| `EVAL_BASE_URL` | brak | gdy ustawiona, runner robi `POST {base}/verify` zamiast wołać `verifyInput` |
-| `EVAL_CASES` | `data/eval/cases.json` | inny plik przypadków |
+| `EVAL_BASE_URL` | brak | gdy ustawiona, runner robi `POST {base}/verify` zamiast woÅ‚aÄ‡ `verifyInput` |
+| `EVAL_CASES` | `eval/cases.json` | inny plik przypadkÃ³w |
 | `EVAL_REPORT` | `data/eval/report.json` | inny plik raportu |
-| `EVAL_CACHE_FILE` | `data/eval/cache.json` | cache dla trybu bezpośredniego (osobny, żeby nie mieszać z demo) |
+| `EVAL_CACHE_FILE` | `data/eval/cache.json` | cache dla trybu bezpoÅ›redniego (osobny, Å¼eby nie mieszaÄ‡ z demo) |
 
-Przebieg jest **sekwencyjny** i trwa kilka minut (30 przypadków × kilka sekund + pobranie URL).
-Jeden błąd przypadku nie przerywa całości — trafia do raportu jako `status: runner_error`.
+Przebieg jest **sekwencyjny** i trwa kilka minut (30 przypadkÃ³w Ã— kilka sekund + pobranie URL).
+Jeden bÅ‚Ä…d przypadku nie przerywa caÅ‚oÅ›ci â€” trafia do raportu jako `status: runner_error`.
 
 ## Jak przypisujemy werdykt do przypadku
 
-System zwraca **wiele twierdzeń** na jedno wejście, a przypadki mają **jeden** oczekiwany
-werdykt. Przyjęta reguła:
+System zwraca **wiele twierdzeÅ„** na jedno wejÅ›cie, a przypadki majÄ… **jeden** oczekiwany
+werdykt. PrzyjÄ™ta reguÅ‚a:
 
-1. werdykt przypadku = werdykt **pierwszego** zwróconego twierdzenia (`claims[0]`),
-   bo ekstrakcja zachowuje kolejność od nagłówka/zdania głównego,
-2. brak twierdzeń → `null` (liczone jako pomyłka, jeśli przypadek ma oczekiwanie inne niż `any`),
-3. dodatkowo raportujemy `anyClaimMatched` — czy oczekiwany werdykt pojawił się
-   na **którymkolwiek** twierdzeniu.
+1. werdykt przypadku = werdykt **pierwszego** zwrÃ³conego twierdzenia (`claims[0]`),
+   bo ekstrakcja zachowuje kolejnoÅ›Ä‡ od nagÅ‚Ã³wka/zdania gÅ‚Ã³wnego,
+2. brak twierdzeÅ„ â†’ `null` (liczone jako pomyÅ‚ka, jeÅ›li przypadek ma oczekiwanie inne niÅ¼ `any`),
+3. dodatkowo raportujemy `anyClaimMatched` â€” czy oczekiwany werdykt pojawiÅ‚ siÄ™
+   na **ktÃ³rymkolwiek** twierdzeniu.
 
-Reguła 1 jest celowo ostra. `case-06` („Polska jest w UE od 2004 i używa euro”) pokazuje jej
-słabość: system może poprawnie oznaczyć drugą część, ale jeśli pierwsze twierdzenie jest
-prawdziwe, przypadek wychodzi jako pomyłka. Dlatego `anyClaimMatched` jest w raporcie obok —
-pokazuje „wiedział, ale nie tam, gdzie patrzymy”.
+ReguÅ‚a 1 jest celowo ostra. `case-06` (â€žPolska jest w UE od 2004 i uÅ¼ywa euroâ€) pokazuje jej
+sÅ‚aboÅ›Ä‡: system moÅ¼e poprawnie oznaczyÄ‡ drugÄ… czÄ™Å›Ä‡, ale jeÅ›li pierwsze twierdzenie jest
+prawdziwe, przypadek wychodzi jako pomyÅ‚ka. Dlatego `anyClaimMatched` jest w raporcie obok â€”
+pokazuje â€žwiedziaÅ‚, ale nie tam, gdzie patrzymyâ€.
 
 ## Metryki
 
 | metryka | definicja |
 |---|---|
-| **accuracy** | trafne werdykty / przypadki z oczekiwaniem innym niż `any` |
-| **macro-F1** | średnia F1 po klasach **występujących w oczekiwaniach** (klasy bez supportu pomijane, żeby nie zaniżać sztucznie) |
-| **abstention** | oczekiwane `insufficient_evidence` → przewidziane `insufficient_evidence` |
-| **citation coverage** | twierdzenia z ≥1 dowodem / wszystkie zwrócone twierdzenia |
-| **injection pass** | przypadki z `mustMentionInLimitations`: czy któreś ograniczenie zawiera wymagany termin (np. „instrukcje”) |
-| **latencja** | mediana i p95 czasu ściany (`performance.now()`), plus `timingMs` z odpowiedzi |
-| **koszt** | średni i łączny `costUsd` z odpowiedzi (szacunek systemu, nie faktura) |
+| **accuracy** | trafne werdykty / przypadki z oczekiwaniem innym niÅ¼ `any` |
+| **macro-F1** | Å›rednia F1 po klasach **wystÄ™pujÄ…cych w oczekiwaniach** (klasy bez supportu pomijane, Å¼eby nie zaniÅ¼aÄ‡ sztucznie) |
+| **abstention** | oczekiwane `insufficient_evidence` â†’ przewidziane `insufficient_evidence` |
+| **citation coverage** | twierdzenia z â‰¥1 dowodem / wszystkie zwrÃ³cone twierdzenia |
+| **injection pass** | przypadki z `mustMentionInLimitations`: czy ktÃ³reÅ› ograniczenie zawiera wymagany termin (np. â€žinstrukcjeâ€) |
+| **latencja** | mediana i p95 czasu Å›ciany (`performance.now()`), plus `timingMs` z odpowiedzi |
+| **koszt** | Å›redni i Å‚Ä…czny `costUsd` z odpowiedzi (szacunek systemu, nie faktura) |
 
-`citation coverage` liczy **wszystkie** twierdzenia, także z przypadków `any`, bo to metryka
-jakości dowodzenia, a nie trafności werdyktu.
+`citation coverage` liczy **wszystkie** twierdzenia, takÅ¼e z przypadkÃ³w `any`, bo to metryka
+jakoÅ›ci dowodzenia, a nie trafnoÅ›ci werdyktu.
 
-## Kategorie (30 przypadków)
+## Kategorie (30 przypadkÃ³w)
 
 | kategoria | n | co testuje |
 |---|---|---|
-| `fact` | 6 | prawdy i fałsze elementarne oraz zdanie częściowo prawdziwe |
-| `context` | 4 | twierdzenia zależne od daty („w 2014”, „obecnie”) |
-| `contradiction` | 4 | sprzeczność z ustalonym rekordem (NATO 1999, wybory 2020, długość Wisły) |
-| `no_evidence` | 5 | konkretne, lecz niepotwierdzalne szczegóły — oczekiwane wstrzymanie |
-| `injection` | 4 | próby wpływu na instrukcje (PL i EN) |
-| `url` | 3 | wejście linkiem (gov.pl, Wikipedia, PKW) |
-| `empty` | 2 | puste wejście i same białe znaki |
-| `unverifiable` | 2 | opinia i prognoza — nie podlegają weryfikacji |
+| `fact` | 6 | prawdy i faÅ‚sze elementarne oraz zdanie czÄ™Å›ciowo prawdziwe |
+| `context` | 4 | twierdzenia zaleÅ¼ne od daty (â€žw 2014â€, â€žobecnieâ€) |
+| `contradiction` | 4 | sprzecznoÅ›Ä‡ z ustalonym rekordem (NATO 1999, wybory 2020, dÅ‚ugoÅ›Ä‡ WisÅ‚y) |
+| `no_evidence` | 5 | konkretne, lecz niepotwierdzalne szczegÃ³Å‚y â€” oczekiwane wstrzymanie |
+| `injection` | 4 | prÃ³by wpÅ‚ywu na instrukcje (PL i EN) |
+| `url` | 3 | wejÅ›cie linkiem (gov.pl, Wikipedia, PKW) |
+| `empty` | 2 | puste wejÅ›cie i same biaÅ‚e znaki |
+| `unverifiable` | 2 | opinia i prognoza â€” nie podlegajÄ… weryfikacji |
 
-## Dlaczego część oczekiwań to `any`
+## Dlaczego czÄ™Å›Ä‡ oczekiwaÅ„ to `any`
 
-Sześć przypadków ma `expected: "any"`:
+SzeÅ›Ä‡ przypadkÃ³w ma `expected: "any"`:
 
-- `case-19` — materiał testowy z danych hackathonu (Brzoska); publicznie brak potwierdzenia
-  zdarzenia, ale bez źródła fact-checkingowego nie ustalam twardo, czy uczciwy werdykt to
+- `case-19` â€” materiaÅ‚ testowy z danych hackathonu (Brzoska); publicznie brak potwierdzenia
+  zdarzenia, ale bez ÅºrÃ³dÅ‚a fact-checkingowego nie ustalam twardo, czy uczciwy werdykt to
   `false`, czy `insufficient_evidence`,
-- `case-24`, `case-25`, `case-26` — **URL**: treść strony zmienia się w czasie i zależy od
-  dostępności czytnika; oceniamy działanie ścieżki URL, nie treść,
-- `case-27`, `case-28` — **puste wejście**: poprawna odpowiedź to `needs_clarification`
-  (bezpośrednio) albo HTTP 400 (przez `/verify`), a to **nie jest werdykt**, więc nie ma go
-  w taksonomii werdyktów.
+- `case-24`, `case-25`, `case-26` â€” **URL**: treÅ›Ä‡ strony zmienia siÄ™ w czasie i zaleÅ¼y od
+  dostÄ™pnoÅ›ci czytnika; oceniamy dziaÅ‚anie Å›cieÅ¼ki URL, nie treÅ›Ä‡,
+- `case-27`, `case-28` â€” **puste wejÅ›cie**: poprawna odpowiedÅº to `needs_clarification`
+  (bezpoÅ›rednio) albo HTTP 400 (przez `/verify`), a to **nie jest werdykt**, wiÄ™c nie ma go
+  w taksonomii werdyktÃ³w.
 
-Zasada: **nie wymyślamy oczekiwań, których nie da się uczciwie uzasadnić bez Google.**
-Lepiej wyłączyć przypadek z accuracy/F1 i powiedzieć to wprost, niż wpisać werdykt „na pamięć”.
-Te przypadki nadal są uruchamiane i widać ich status, liczbę twierdzeń, dowody i czas.
+Zasada: **nie wymyÅ›lamy oczekiwaÅ„, ktÃ³rych nie da siÄ™ uczciwie uzasadniÄ‡ bez Google.**
+Lepiej wyÅ‚Ä…czyÄ‡ przypadek z accuracy/F1 i powiedzieÄ‡ to wprost, niÅ¼ wpisaÄ‡ werdykt â€žna pamiÄ™Ä‡â€.
+Te przypadki nadal sÄ… uruchamiane i widaÄ‡ ich status, liczbÄ™ twierdzeÅ„, dowody i czas.
 
-## Jak czytać wyniki
+## Jak czytaÄ‡ wyniki
 
-- **Niski accuracy nie znaczy, że oczekiwania są złe.** `fact` i `context` zawierają prawdy
-  elementarne (Warszawa stolicą, 460 posłów, UE 2004). Jeśli system zwraca dla nich
-  `insufficient_evidence`, to znaczy, że korpus/Google nie pokrywa podstaw — i to jest
-  właśnie wynik, który ma być widoczny.
+- **Niski accuracy nie znaczy, Å¼e oczekiwania sÄ… zÅ‚e.** `fact` i `context` zawierajÄ… prawdy
+  elementarne (Warszawa stolicÄ…, 460 posÅ‚Ã³w, UE 2004). JeÅ›li system zwraca dla nich
+  `insufficient_evidence`, to znaczy, Å¼e korpus/Google nie pokrywa podstaw â€” i to jest
+  wÅ‚aÅ›nie wynik, ktÃ³ry ma byÄ‡ widoczny.
 - **Bez klucza `GOOGLE_FACT_CHECK_API_KEY`** werdykty `false`/`confirmed`/`misleading`
-  praktycznie nie powstają (korpus manifestu daje tylko `context`). Raport pokazuje
-  `klucz Google Fact Check: nie`. Porównuj przebiegi przy tej samej konfiguracji.
-- **Cache** (`data/eval/cache.json`) utrwala werdykty między przebiegami: druga iteracja
-  bywa szybsza i bardziej stanowcza. Do czystego pomiaru usuń plik cache przed biegiem.
-- **Niedeterminizm**: ekstrakcja modelu może dzielić zdanie inaczej, więc `claims[0]` i wynik
-  mogą się różnić między przebiegami. To nie błąd runnera — to właściwość systemu.
+  praktycznie nie powstajÄ… (korpus manifestu daje tylko `context`). Raport pokazuje
+  `klucz Google Fact Check: nie`. PorÃ³wnuj przebiegi przy tej samej konfiguracji.
+- **Cache** (`data/eval/cache.json`) utrwala werdykty miÄ™dzy przebiegami: druga iteracja
+  bywa szybsza i bardziej stanowcza. Do czystego pomiaru usuÅ„ plik cache przed biegiem.
+- **Niedeterminizm**: ekstrakcja modelu moÅ¼e dzieliÄ‡ zdanie inaczej, wiÄ™c `claims[0]` i wynik
+  mogÄ… siÄ™ rÃ³Å¼niÄ‡ miÄ™dzy przebiegami. To nie bÅ‚Ä…d runnera â€” to wÅ‚aÅ›ciwoÅ›Ä‡ systemu.
 - **Koszt** to `costUsd` zwracane przez system (szacunek), nie rzeczywiste rozliczenie.
 
-## Powiązane testy
+## PowiÄ…zane testy
 
 ```bash
 node node_modules/typescript/bin/tsc --noEmit     # tylko src/
 bun run scripts/test-verify.ts                   # dym: puste / injection / twierdzenie
-bun run scripts/eval.ts                          # pełna ewaluacja
+bun run scripts/eval.ts                          # peÅ‚na ewaluacja
 ```
 
-`scripts/` nie jest w `tsconfig.json` (`include: ["src"]`), więc runner sprawdzamy osobno:
+`scripts/` nie jest w `tsconfig.json` (`include: ["src"]`), wiÄ™c runner sprawdzamy osobno:
 
 ```bash
 bun build --target=bun scripts/eval.ts
 bun build --target=bun scripts/eval-report.ts
 ```
+
+## Wyniki ostatniego przebiegu (2026-11-22, bez klucza Google)
+
+| Metryka | Wynik | Cel MVP | Status |
+|---|---|---|---|
+| accuracy (24 oceniane) | 25,0% | — | — |
+| macro-F1 | 0,205 | ≥0,75 | ❌ |
+| wstrzymanie przy braku dowodów | 83,3% (5/6) | ≥80% | ✅ |
+| pokrycie cytowań | 80,4% (45/56) | ≥95% | ❌ |
+| prompt injection | 100% (4/4) | ≥90% | ✅ |
+| mediana odpowiedzi | 2 585 ms | ≤30 s | ✅ |
+| p95 | 16 180 ms | — | — |
+| koszt / zapytanie | $0,00068 (~$0,07/100) | raportowany | ✅ |
+| E2E (`scripts/e2e.ts`) | 19/19 | 100% | ✅ |
+| spójność kanałów web/api | identyczne werdykty | 100% | ✅ |
+
+**Interpretacja:** F1 i pokrycie cytowań są poniżej celu, bo (a) `GOOGLE_FACT_CHECK_API_KEY` jest
+pusty — bez niego nie ma źródeł „supports/refutes" poza treścią korpusu, (b) korpus to strony portali,
+nie dokumenty z konkretnymi faktami, a (c) matcher celowo wymaga zdania, które naprawdę nazywa
+podmiot i obiekt (żeby nie dawać `confirmed` z menu strony). System w tej konfiguracji uczciwie
+wstrzymuje się zamiast zgadywać — spełnia wymóg wstrzymania, ale nie F1. Po ustawieniu klucza Google
+i podłączeniu dokumentów do `documents` metryki te powinny wzrosnąć.
+
+

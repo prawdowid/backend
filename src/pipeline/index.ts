@@ -297,7 +297,16 @@ export async function runPipeline(
     mark(`extract (${claims.length} claims)`, stage);
 
     if (claims.length === 0) {
-        return { status: "done", political, lang, date, claims, hits: [], misses: [] };
+        return {
+            status: "done",
+            political,
+            lang,
+            date,
+            claims,
+            hits: [],
+            misses: [],
+            injectionSuspected,
+        };
     }
 
     // Stage 3: embed only incoming claims; cached vectors live in the store.

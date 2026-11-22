@@ -1,24 +1,24 @@
-/**
+﻿/**
  * Runner ewaluacji PRAWDOWID.
  *
- * Domyślnie woła `verifyInput` bezpośrednio (szybciej, bez HTTP).
- * Gdy ustawisz EVAL_BASE_URL, woła `POST {base}/verify` na działającym serwerze.
+ * DomyÅ›lnie woÅ‚a `verifyInput` bezpoÅ›rednio (szybciej, bez HTTP).
+ * Gdy ustawisz EVAL_BASE_URL, woÅ‚a `POST {base}/verify` na dziaÅ‚ajÄ…cym serwerze.
  *
- * Wejście:  data/eval/cases.json        (EVAL_CASES)
- * Wyjście:  data/eval/report.json       (EVAL_REPORT)
+ * WejÅ›cie:  eval/cases.json        (EVAL_CASES)
+ * WyjÅ›cie:  data/eval/report.json       (EVAL_REPORT)
  *
- * Cache: przy trybie bezpośrednim używamy osobnego pliku (EVAL_CACHE_FILE,
- * domyślnie data/eval/cache.json), żeby ewaluacja nie mieszała się z cache demo.
+ * Cache: przy trybie bezpoÅ›rednim uÅ¼ywamy osobnego pliku (EVAL_CACHE_FILE,
+ * domyÅ›lnie data/eval/cache.json), Å¼eby ewaluacja nie mieszaÅ‚a siÄ™ z cache demo.
  *
- * Zasady: brak nowych zależności, sekwencyjnie, max 30 przypadków, jeden błąd
- * przypadku nie przerywa całego przebiegu.
+ * Zasady: brak nowych zaleÅ¼noÅ›ci, sekwencyjnie, max 30 przypadkÃ³w, jeden bÅ‚Ä…d
+ * przypadku nie przerywa caÅ‚ego przebiegu.
  */
 import "dotenv/config";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { Verdict, VerifyResponse } from "../src/pipeline/types";
 
-const CASES_FILE = process.env["EVAL_CASES"] ?? "data/eval/cases.json";
+const CASES_FILE = process.env["EVAL_CASES"] ?? "eval/cases.json";
 const REPORT_FILE = process.env["EVAL_REPORT"] ?? "data/eval/report.json";
 const BASE_URL = (process.env["EVAL_BASE_URL"] ?? "").trim().replace(/\/+$/, "");
 const MAX_CASES = 30;
@@ -42,7 +42,7 @@ type EvalCase = {
     notes?: string;
 };
 
-/** Odpowiedź sprowadzona do tego, co mierzymy. */
+/** OdpowiedÅº sprowadzona do tego, co mierzymy. */
 type Outcome = {
     status: string;
     claims: Array<{ verdict: Verdict; evidence: number }>;
@@ -64,7 +64,7 @@ type CaseResult = {
     category: string;
     expected: Expected;
     predicted: Verdict | null;
-    /** Czy oczekiwany werdykt pojawił się na którymkolwiek twierdzeniu (metryka pomocnicza). */
+    /** Czy oczekiwany werdykt pojawiÅ‚ siÄ™ na ktÃ³rymkolwiek twierdzeniu (metryka pomocnicza). */
     anyClaimMatched: boolean;
     status: string;
     httpStatus: number | null;
@@ -93,7 +93,7 @@ type ClassMetrics = {
 };
 
 // ---------------------------------------------------------------------------
-// małe pomocniki
+// maÅ‚e pomocniki
 // ---------------------------------------------------------------------------
 
 function isVerdict(value: unknown): value is Verdict {
@@ -125,15 +125,15 @@ function p95(values: number[]): number | null {
 }
 
 function pct(value: number | null): string {
-    return value === null ? "—" : `${(value * 100).toFixed(1)}%`;
+    return value === null ? "â€”" : `${(value * 100).toFixed(1)}%`;
 }
 
 function money(value: number | null): string {
-    return value === null ? "—" : `$${value.toFixed(6)}`;
+    return value === null ? "â€”" : `$${value.toFixed(6)}`;
 }
 
 // ---------------------------------------------------------------------------
-// ładowanie przypadków
+// Å‚adowanie przypadkÃ³w
 // ---------------------------------------------------------------------------
 
 async function loadCases(): Promise<EvalCase[]> {
@@ -141,7 +141,7 @@ async function loadCases(): Promise<EvalCase[]> {
     try {
         raw = await readFile(CASES_FILE, "utf8");
     } catch {
-        throw new Error(`Nie znalazłem pliku z przypadkami: ${CASES_FILE}`);
+        throw new Error(`Nie znalazÅ‚em pliku z przypadkami: ${CASES_FILE}`);
     }
 
     let parsed: unknown;
@@ -151,7 +151,7 @@ async function loadCases(): Promise<EvalCase[]> {
         throw new Error(`Plik ${CASES_FILE} nie jest poprawnym JSON-em: ${(error as Error).message}`);
     }
 
-    if (!Array.isArray(parsed)) throw new Error(`Plik ${CASES_FILE} musi zawierać tablicę przypadków.`);
+    if (!Array.isArray(parsed)) throw new Error(`Plik ${CASES_FILE} musi zawieraÄ‡ tablicÄ™ przypadkÃ³w.`);
 
     const cases: EvalCase[] = [];
     for (const item of parsed) {
@@ -175,13 +175,13 @@ async function loadCases(): Promise<EvalCase[]> {
     }
 
     if (cases.length > MAX_CASES) {
-        console.warn(`[eval] ${cases.length} przypadków w pliku — biorę pierwsze ${MAX_CASES}.`);
+        console.warn(`[eval] ${cases.length} przypadkÃ³w w pliku â€” biorÄ™ pierwsze ${MAX_CASES}.`);
     }
     return cases.slice(0, MAX_CASES);
 }
 
 // ---------------------------------------------------------------------------
-// wywołanie systemu: bezpośrednio albo przez HTTP
+// wywoÅ‚anie systemu: bezpoÅ›rednio albo przez HTTP
 // ---------------------------------------------------------------------------
 
 function normalizeClaims(raw: unknown): Array<{ verdict: Verdict; evidence: number }> {
@@ -216,7 +216,7 @@ let directVerify: ((request: { text?: string; url?: string }) => Promise<VerifyR
 
 async function getDirectVerify(): Promise<(request: { text?: string; url?: string }) => Promise<VerifyResponse>> {
     if (directVerify) return directVerify;
-    // Musi być ustawione PRZED importem verify.ts: defaultCache powstaje przy imporcie.
+    // Musi byÄ‡ ustawione PRZED importem verify.ts: defaultCache powstaje przy imporcie.
     process.env["CACHE_FILE"] ??= process.env["EVAL_CACHE_FILE"] ?? "data/eval/cache.json";
     const module = await import("../src/pipeline/verify");
     directVerify = (request) => module.verifyInput(request);
@@ -248,7 +248,7 @@ async function callHttp(input: { text?: string; url?: string }): Promise<Outcome
 function checkInjection(required: string[] | undefined, limitations: string[]): InjectionCheck | null {
     if (!required || required.length === 0) return null;
     const haystack = limitations.join(" \n ").toLowerCase();
-    // Wpis na liście to alternatywa: wystarczy, że odpowiedź wspomni jeden z terminów.
+    // Wpis na liÅ›cie to alternatywa: wystarczy, Å¼e odpowiedÅº wspomni jeden z terminÃ³w.
     const matched = required.find((term) => haystack.includes(term.toLowerCase())) ?? null;
     return { required, passed: matched !== null, matched };
 }
@@ -262,7 +262,7 @@ async function runCase(testCase: EvalCase): Promise<CaseResult> {
         outcome = BASE_URL ? await callHttp(testCase.input) : await callDirect(testCase.input);
     } catch (error) {
         errorMessage = error instanceof Error ? error.message : String(error);
-        console.error(`[eval] ${testCase.id}: błąd wywołania — ${errorMessage}`);
+        console.error(`[eval] ${testCase.id}: bÅ‚Ä…d wywoÅ‚ania â€” ${errorMessage}`);
     }
 
     const latencyMs = Math.round(performance.now() - started);
@@ -490,25 +490,25 @@ function printMarkdown(report: {
     console.log("");
     console.log(`- tryb: **${String(meta["mode"])}**${meta["baseUrl"] ? ` (${String(meta["baseUrl"])})` : ""}`);
     console.log(`- uruchomiono: ${String(meta["runAt"])}`);
-    console.log(`- przypadków: ${summary.cases} (ocenianych werdyktowo: ${summary.evaluated}, "any": ${summary.anyExpected})`);
+    console.log(`- przypadkÃ³w: ${summary.cases} (ocenianych werdyktowo: ${summary.evaluated}, "any": ${summary.anyExpected})`);
     console.log(`- czas przebiegu: ${String(meta["durationHuman"])}`);
     console.log(`- klucz Google Fact Check: ${meta["googleFactCheckKey"] ? "ustawiony" : "brak"}`);
     console.log("");
     console.log("### Metryki");
     console.log("");
-    console.log("| metryka | wartość |");
+    console.log("| metryka | wartoÅ›Ä‡ |");
     console.log("|---|---|");
     console.log(`| accuracy | ${pct(summary.accuracy)} (${summary.correct}/${summary.evaluated}) |`);
-    console.log(`| macro-F1 | ${summary.macroF1 === null ? "—" : summary.macroF1.toFixed(3)} |`);
-    console.log(`| trafność wstrzymania (abstention) | ${pct(summary.abstention.rate)} (${summary.abstention.correct}/${summary.abstention.expected}) |`);
-    console.log(`| pokrycie cytowaniami | ${pct(summary.citationCoverage)} (${summary.claimsWithEvidence}/${summary.claimsTotal} twierdzeń) |`);
+    console.log(`| macro-F1 | ${summary.macroF1 === null ? "â€”" : summary.macroF1.toFixed(3)} |`);
+    console.log(`| trafnoÅ›Ä‡ wstrzymania (abstention) | ${pct(summary.abstention.rate)} (${summary.abstention.correct}/${summary.abstention.expected}) |`);
+    console.log(`| pokrycie cytowaniami | ${pct(summary.citationCoverage)} (${summary.claimsWithEvidence}/${summary.claimsTotal} twierdzeÅ„) |`);
     console.log(`| injection pass | ${pct(summary.injection.rate)} (${summary.injection.passed}/${summary.injection.cases}) |`);
     console.log(`| trafienie gdziekolwiek w twierdzeniach | ${summary.anyClaimMatches}/${summary.evaluated} |`);
-    console.log(`| mediana / p95 latencji | ${summary.latency.medianMs ?? "—"} ms / ${summary.latency.p95Ms ?? "—"} ms |`);
-    console.log(`| koszt średni / łączny | ${money(summary.cost.meanUsd)} / ${money(summary.cost.totalUsd)} |`);
-    console.log(`| dowody łącznie | ${summary.evidenceTotal} |`);
+    console.log(`| mediana / p95 latencji | ${summary.latency.medianMs ?? "â€”"} ms / ${summary.latency.p95Ms ?? "â€”"} ms |`);
+    console.log(`| koszt Å›redni / Å‚Ä…czny | ${money(summary.cost.meanUsd)} / ${money(summary.cost.totalUsd)} |`);
+    console.log(`| dowody Å‚Ä…cznie | ${summary.evidenceTotal} |`);
     console.log("");
-    console.log("### F1 per klasa (tylko przypadki z oczekiwaniem innym niż \"any\")");
+    console.log("### F1 per klasa (tylko przypadki z oczekiwaniem innym niÅ¼ \"any\")");
     console.log("");
     console.log("| klasa | n | precision | recall | F1 |");
     console.log("|---|---|---|---|---|");
@@ -520,7 +520,7 @@ function printMarkdown(report: {
     console.log("");
     console.log("### Kategorie");
     console.log("");
-    console.log("| kategoria | przypadki | oceniane | trafne | accuracy | abstencja | injection | błędy | zero claimów |");
+    console.log("| kategoria | przypadki | oceniane | trafne | accuracy | abstencja | injection | bÅ‚Ä™dy | zero claimÃ³w |");
     console.log("|---|---|---|---|---|---|---|---|---|");
     for (const item of categories) {
         console.log(
@@ -534,7 +534,7 @@ function printMarkdown(report: {
     console.log("|---|---|---|---|---|---|---|---|---|");
     for (const item of cases) {
         console.log(
-            `| ${item.id} | ${item.category} | ${item.expected} | ${item.predicted ?? "—"} | ${item.status}${item.httpStatus ? ` (${item.httpStatus})` : ""} | ${item.claims} | ${item.evidence} | ${item.latencyMs} | ${item.costUsd.toFixed(6)} |`,
+            `| ${item.id} | ${item.category} | ${item.expected} | ${item.predicted ?? "â€”"} | ${item.status}${item.httpStatus ? ` (${item.httpStatus})` : ""} | ${item.claims} | ${item.evidence} | ${item.latencyMs} | ${item.costUsd.toFixed(6)} |`,
         );
     }
 
@@ -543,11 +543,11 @@ function printMarkdown(report: {
     );
     if (misses.length > 0) {
         console.log("");
-        console.log("### Pomyłki werdyktowe");
+        console.log("### PomyÅ‚ki werdyktowe");
         console.log("");
         for (const item of misses) {
             console.log(
-                `- **${item.id}** (${item.category}): oczekiwane \`${item.expected}\`, przewidziane \`${item.predicted ?? "brak"}\`${item.anyClaimMatched ? " — oczekiwany werdykt był na innym twierdzeniu" : ""}`,
+                `- **${item.id}** (${item.category}): oczekiwane \`${item.expected}\`, przewidziane \`${item.predicted ?? "brak"}\`${item.anyClaimMatched ? " â€” oczekiwany werdykt byÅ‚ na innym twierdzeniu" : ""}`,
             );
         }
     }
@@ -579,11 +579,11 @@ async function main(): Promise<void> {
     const startedAt = Date.now();
     const cases = await loadCases();
     if (cases.length === 0) {
-        throw new Error(`Brak poprawnych przypadków w ${CASES_FILE}.`);
+        throw new Error(`Brak poprawnych przypadkÃ³w w ${CASES_FILE}.`);
     }
 
     console.log(
-        `[eval] tryb: ${BASE_URL ? `HTTP ${BASE_URL}` : "bezpośredni verifyInput"}; przypadków: ${cases.length}`,
+        `[eval] tryb: ${BASE_URL ? `HTTP ${BASE_URL}` : "bezpoÅ›redni verifyInput"}; przypadkÃ³w: ${cases.length}`,
     );
 
     const results: CaseResult[] = [];
@@ -596,10 +596,10 @@ async function main(): Promise<void> {
         for (const model of result.models) models.add(model);
 
         const marker = result.expected === "any" ? "any" : result.predicted === result.expected ? "OK " : "MISS";
-        const suffix = result.error ? ` błąd: ${result.error}` : "";
+        const suffix = result.error ? ` bÅ‚Ä…d: ${result.error}` : "";
         console.log(
             `[eval] ${String(index + 1).padStart(2, "0")}/${cases.length} ${marker} ${result.id} ` +
-                `status=${result.status} oczekiwane=${result.expected} przewidziane=${result.predicted ?? "—"} ` +
+                `status=${result.status} oczekiwane=${result.expected} przewidziane=${result.predicted ?? "â€”"} ` +
                 `claims=${result.claims} dowody=${result.evidence} ${result.latencyMs} ms${suffix}`,
         );
     }
@@ -637,7 +637,7 @@ async function main(): Promise<void> {
 
     console.log("");
     console.log(`Raport zapisany: ${REPORT_FILE}`);
-    console.log(`Podsumowanie do slajdów: bun run scripts/eval-report.ts`);
+    console.log(`Podsumowanie do slajdÃ³w: bun run scripts/eval-report.ts`);
 }
 
 try {
@@ -646,3 +646,4 @@ try {
     console.error(`[eval] przerwano: ${(error as Error).message}`);
     process.exitCode = 1;
 }
+

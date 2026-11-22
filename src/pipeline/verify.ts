@@ -3,7 +3,7 @@ import { runPipeline, type CacheStore } from ".";
 import { FileCacheStore } from "./filestore";
 import { MySQLCacheStore } from "./mysqlstore";
 import { researchClaims } from "../research";
-import { Markdown } from "../modules/utils";
+import { ReadableText } from "../modules/utils";
 import { OpenRouterWrapper } from "../modules/openrouter";
 import {
     DISCLAIMER_PL,
@@ -135,7 +135,7 @@ export async function verifyInput(
 
     try {
         // An explicit url always wins over surrounding text ("sprawdź to: https://...").
-        const content = targetUrl ? await Markdown(targetUrl) : text;
+        const content = targetUrl ? await ReadableText(targetUrl) : text;
         const pipeline = await runPipeline(content, cache, { asOf: options.asOf });
         const claims: ClaimVerdict[] = [];
         const covered = new Set<string>();
