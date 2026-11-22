@@ -810,6 +810,33 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
         };
     }
 
+    // --- opinion / recommendation gate -----------------------------------
+    // "Poland should adopt the euro" is not a checkable fact: no document can
+    // make it true or false. This must not become `false` just because the
+    // current currency differs.
+    if (
+        /\b(powinien|powinna|powinno|should|ought|postulat|apeluje|nalezy|należy)\b/iu.test(
+            `${claim.text} ${claim.fact?.p ?? ""}`,
+        )
+    ) {
+        return {
+            verdict: {
+                id: claim.id,
+                claim: claimTextFor(claim),
+                verdict: "not_verifiable",
+                confidence: 0.2,
+                strength: "low",
+                reasoning:
+                    "To opinia lub postulat, a nie twierdzenie o stanie faktów. Nie da się jej potwierdzić ani obalić dowodami.",
+                evidence: [],
+                limitations: ["Treść jest opinią lub postulatem, nie faktem."],
+                asOf: ctx.asOf,
+                cached: false,
+            },
+            googleUsed: false,
+        };
+    }
+
     // --- deterministic facts short-circuit -------------------------------
     // EU/NATO membership, eurozone and election rounds are fixed public facts.
     // Settle them before search, so a bad lexical hit cannot refute them.

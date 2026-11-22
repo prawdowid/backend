@@ -116,7 +116,10 @@ export function membershipEvidence(claim: ClaimInput, retrievedAt: string): Evid
     const subject = norm(fact.s);
     const object = norm(fact.o);
     const predicate = norm(fact.p);
-    const text = norm(`${claim.text} ${fact.p} ${fact.o}`);
+    const text = norm(`${claim.text} ${claim.details ?? ""} ${fact.p} ${fact.o}`);
+    if (/powinien|powinna|powinno|should|ought|nalezy|należy|trzeba|postulat/.test(text)) {
+        return null;
+    }
     if (!/\b(polska|poland|rzeczpospolita)\b/.test(subject)) return null;
 
     const membership =
@@ -303,9 +306,14 @@ export function currencyEvidence(claim: ClaimInput, retrievedAt: string): Eviden
     const subject = norm(fact.s);
     const object = norm(fact.o);
     const text = norm(claim.text);
+    const opinion = norm(`${claim.text} ${claim.quote ?? ""}`);
 
     // A normative "Poland should adopt the euro" is an opinion, not a fact.
-    if (/powinien|powinna|powinno|should|ought|nalezy|należy|trzeba|postulat/.test(text)) {
+    if (
+        /powinien|powinna|powinno|should|ought|nalezy|należy|trzeba|postulat/.test(
+            opinion,
+        )
+    ) {
         return null;
     }
 
