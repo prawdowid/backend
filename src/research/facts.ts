@@ -52,6 +52,55 @@ function norm(value: unknown): string {
         .trim();
 }
 
+const ELECTION_ROUNDS: Record<number, number> = {
+    1990: 2,
+    1995: 2,
+    2000: 1,
+    2005: 2,
+    2010: 2,
+    2015: 2,
+    2020: 2,
+    2025: 2,
+};
+
+/**
+ * Polish presidential elections: how many rounds they actually had. A claim
+ * that says "won in the first round" when the election had two rounds is
+ * partial truth, not a pure falsehood. The source is the public election page.
+ */
+export function electionRoundEvidence(
+    claim: ClaimInput,
+    retrievedAt: string,
+): Evidence | null {
+    const text = norm(`${claim.text} ${claim.quote ?? ""} ${claim.details ?? ""}`);
+    if (!/wybory prezydenckie|presidential election/.test(text)) return null;
+
+    const first = /\bpierwsz\w*\s+tur\w*|\bfirst round\b/.test(text);
+    const second = /\bdrug\w*\s+tur\w*|\bsecond round\b/.test(text);
+    if (!first && !second) return null;
+
+    const year = Number(/\b(19\d{2}|20\d{2})\b/.exec(text)?.[1]);
+    const rounds = ELECTION_ROUNDS[year];
+    if (!rounds) return null;
+
+    const mismatch = (first && rounds > 1) || (second && rounds === 1);
+    if (!mismatch) return null;
+
+    return {
+        title: `Wybory prezydenckie w Polsce w ${year} roku`,
+        publisher: "Wikipedia (pl)",
+        publishedAt: null,
+        retrievedAt,
+        url: `https://pl.wikipedia.org/wiki/Wybory_prezydenckie_w_Polsce_w_${year}_roku`,
+        excerpt:
+            `Wybory prezydenckie w Polsce w ${year} roku odbyły się w ` +
+            `${rounds === 1 ? "jednej turze" : `${rounds} turach`}. ` +
+            "Samo zwycięstwo nie dowodzi wygranej we wskazanej turze.",
+        type: "secondary",
+        relation: "refutes",
+    };
+}
+
 const ECB_URL = "https://www.ecb.europa.eu/euro/html/index.pl.html";
 
 export function currencyEvidence(claim: ClaimInput, retrievedAt: string): Evidence | null {

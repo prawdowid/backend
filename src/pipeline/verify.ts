@@ -393,6 +393,27 @@ export async function verifyInput(
                     claim.reasoning +=
                         " Twierdzenie pomija kwalifikator tury wyborów, więc jest tylko częściowo prawdziwe.";
                     claim.limitations.push("Pominięto kwalifikator: tura wyborów.");
+                    continue;
+                }
+
+                // The claim names a round, and a source explicitly names a round.
+                // Winning may still be true, so this is partial truth.
+                const claimHasRound = /\btur\w*|\bround\b/i.test(claim.claim);
+                const otherRound =
+                    claimHasRound &&
+                    claim.evidence.find(
+                        (item) =>
+                            item.relation === "refutes" &&
+                            /\btur\w*|\bround\b/iu.test(item.excerpt),
+                    );
+                if (
+                    (claim.verdict === "insufficient_evidence" || claim.verdict === "false") &&
+                    otherRound
+                ) {
+                    claim.verdict = "misleading";
+                    claim.reasoning =
+                        "Rdzeń twierdzenia może być prawdziwy, ale wskazana tura wyborów się nie zgadza.";
+                    claim.limitations.push("Źródło wskazuje inną turę wyborów.");
                 }
             }
         }

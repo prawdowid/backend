@@ -1201,7 +1201,14 @@ export async function lookupWikidata(claim: ClaimInput): Promise<WikidataLookupR
         const rounds = (base.claims[P.pointInTime] ?? []).filter(
             (statement) => statement.value.type === "time",
         );
-        if (rounds.length > 1) return null;
+        if (rounds.length > 1) {
+            return {
+                relation: "refutes",
+                value: `Wybory odbyły się w ${rounds.length} turach; samo zwycięstwo nie dowodzi wygranej w pierwszej turze.`,
+                url,
+                confidence: 0.82,
+            };
+        }
     }
 
     if (fact.neg === true) relation = relation === "supports" ? "refutes" : "supports";

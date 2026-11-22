@@ -18,7 +18,7 @@ import { searchSources } from "../sources";
 import { searchDisinfoCases } from "./euvsdisinfo";
 import { searchWeb } from "./search";
 import { wikidataEvidence } from "./wikidata";
-import { currencyEvidence } from "./facts";
+import { currencyEvidence, electionRoundEvidence } from "./facts";
 import { searchCorpusDocuments } from "./corpus-docs";
 import { fetchWithProxy } from "../modules/proxy";
 import type {
@@ -904,6 +904,63 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
         limitations.push("Lokalny korpus dokumentów był niedostępny.");
     }
 
+    // Deterministic checks run before network search so a slow fact-check API
+    // cannot consume the budget and rob a claim of a certain answer.
+    // Eurozone membership / currency.
+    if (
+        !ctx.offline &&
+        !evidence.some((item) => item.relation === "supports" || item.relation === "refutes")
+    ) {
+        const currency = currencyEvidence(claim, retrievedAt);
+        if (currency) {
+            seenUrls.add(currency.url.toLowerCase());
+            evidence.push(currency);
+            limitations.push("Sprawdzono przynależność do strefy euro.");
+        }
+    }
+
+    // Polish presidential election rounds (deterministic public record).
+    if (
+        !ctx.offline &&
+        !evidence.some((item) => item.relation === "supports" || item.relation === "refutes")
+    ) {
+        const round = electionRoundEvidence(claim, retrievedAt);
+        if (round) {
+            seenUrls.add(round.url.toLowerCase());
+            evidence.push(round);
+            limitations.push("Sprawdzono liczbę tur wyborów prezydenckich.");
+        }
+    }
+
+    // Wikidata: deterministic value lookup for factual relations.
+    if (
+        !ctx.offline &&
+        !evidence.some((item) => item.relation === "supports" || item.relation === "refutes")
+    ) {
+        try {
+            // Extraction may leave the year only in the text. Wikidata needs it to
+            // compare membership dates instead of just "is a member".
+            const year = (
+                `${claim.text} ${claim.quote ?? ""} ${claim.details ?? ""}`.match(
+                    /\b(1[89]\d{2}|20\d{2})\b/,
+                ) ?? []
+            )[1];
+            const lookupClaim =
+                claim.fact && !claim.fact.t && year
+                    ? { ...claim, fact: { ...claim.fact, t: year } }
+                    : claim;
+
+            const item = await wikidataEvidence(lookupClaim, retrievedAt);
+            if (item) {
+                seenUrls.add(item.url.toLowerCase());
+                evidence.push(item);
+                limitations.push("Wykorzystano Wikidata.");
+            }
+        } catch {
+            limitations.push("Wikidata była niedostępna.");
+        }
+    }
+
     // --- b) Google Fact Check ---------------------------------------------
     let googleUsed = false;
     const reviewVerdicts: Verdict[] = [];
@@ -1087,48 +1144,6 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
             } catch {
                 // One failed review page must not block other sources.
             }
-        }
-    }
-
-    // Deterministic common-fact check (Eurozone membership / currency).
-    if (
-        !ctx.offline &&
-        !evidence.some((item) => item.relation === "supports" || item.relation === "refutes")
-    ) {
-        const currency = currencyEvidence(claim, retrievedAt);
-        if (currency) {
-            seenUrls.add(currency.url.toLowerCase());
-            evidence.push(currency);
-            limitations.push("Sprawdzono przynależność do strefy euro.");
-        }
-    }
-
-    // Wikidata: deterministic value lookup for factual relations.
-    if (
-        !ctx.offline &&
-        !evidence.some((item) => item.relation === "supports" || item.relation === "refutes")
-    ) {
-        try {
-            // Extraction may leave the year only in the text. Wikidata needs it to
-            // compare membership dates instead of just "is a member".
-            const year = (
-                `${claim.text} ${claim.quote ?? ""} ${claim.details ?? ""}`.match(
-                    /\b(1[89]\d{2}|20\d{2})\b/,
-                ) ?? []
-            )[1];
-            const lookupClaim =
-                claim.fact && !claim.fact.t && year
-                    ? { ...claim, fact: { ...claim.fact, t: year } }
-                    : claim;
-
-            const item = await wikidataEvidence(lookupClaim, retrievedAt);
-            if (item) {
-                seenUrls.add(item.url.toLowerCase());
-                evidence.push(item);
-                limitations.push("Wykorzystano Wikidata.");
-            }
-        } catch {
-            limitations.push("Wikidata była niedostępna.");
         }
     }
 
