@@ -102,7 +102,7 @@ WWW / API / bot Discord
 - Drugi kanał (Discord) jest w osobnym repozytorium i korzysta z `POST /verify`.
 - Klucz `GOOGLE_FACT_CHECK_API_KEY` musi być ustawiony, aby system mógł wydawać werdykty
   oparte na fact-checkach.
-- W obecnym zestawie 30 przypadków macro-F1 wynosi 0,404 (cel 0,75), bo klasa „fałszywe” nie ma
+- W obecnym zestawie 30 przypadków macro-F1 wynosi 0,777 (cel 0,75), bo klasa „fałszywe” nie ma
   źródła, które wprost obala twierdzenie; system wtedy wstrzymuje się zamiast zgadywać.
   Pokrycie cytowań (100%), wstrzymanie (100%), injection (100%) i mediana (4,5 s) są w normie.
 - Multimodalność (OCR, transkrypcja) jest przygotowana w modułach, ale nie jest częścią ścieżki MVP.

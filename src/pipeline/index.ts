@@ -52,6 +52,8 @@ export interface CacheStore {
      * the pipeline falls back to `all()` + in-process cosine when absent.
      */
     search?(vector: number[], limit: number, asOf: string): Promise<CachedClaim[]>;
+    /** Optional lexical search for caches without embeddings. */
+    searchText?(text: string, limit: number, asOf: string): Promise<CachedClaim[]>;
 }
 
 export type CacheHit = {
@@ -368,8 +370,8 @@ export async function runPipeline(
     // Stage 3: embed only incoming claims; cached vectors live in the store.
     stage = Date.now();
     const vectors = await OpenRouterWrapper.Embed(claims.map((c) => c.text));
-    // Stores with a vector index must not be loaded wholesale.
-    const candidates = cache.search ? [] : await cache.all();
+    // Stores with an index must not be loaded wholesale.
+    const candidates = cache.search || cache.searchText ? [] : await cache.all();
     mark(`embed + cache.all (${candidates.length} cached)`, stage);
 
     // Stage 4: exact key hit first, otherwise shortlist + one batched Jev request.
