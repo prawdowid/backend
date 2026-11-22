@@ -12,7 +12,7 @@
 import { GoogleFactCheck } from "../modules/google";
 import type { FactCheckClaim, FactCheckReview } from "../modules/google";
 import type { DecisionsNoulQuestion } from "@openrouter/sdk/models";
-import { Markdown } from "../modules/utils";
+import { Markdown, ReadableText } from "../modules/utils";
 import { OpenRouterWrapper } from "../modules/openrouter";
 import { searchSources } from "../sources";
 import { searchDisinfoCases } from "./euvsdisinfo";
@@ -868,6 +868,7 @@ async function researchOne(
     // --- b) Google Fact Check ---------------------------------------------
     let googleUsed = false;
     const reviewVerdicts: Verdict[] = [];
+    const reviewUrls = new Set<string>();
 
     if (ctx.offline) {
         limitations.push("Tryb offline — pominięto Google Fact Check.");
@@ -877,6 +878,7 @@ async function researchOne(
             claim.text,
             fact ? `${fact.s} ${fact.o}` : "",
             fact ? `${fact.s} ${fact.p.replace(/_/g, " ")} ${fact.o}` : "",
+            fact ? `${fact.s}` : "",
         ]
             .map((query) => query.trim())
             .filter((query, index, all) => query.length > 0 && all.indexOf(query) === index)
@@ -899,6 +901,9 @@ async function researchOne(
                     if (!key || seenTexts.has(key)) continue;
                     seenTexts.add(key);
                     parents.push(parent);
+                    for (const review of parent.claimReview ?? []) {
+                        if (review.url) reviewUrls.add(review.url);
+                    }
                 }
 
                 if (parents.length >= 8) break;
@@ -940,6 +945,39 @@ async function researchOne(
             }
         } catch {
             limitations.push("Dostęp do Google Fact Check był ograniczony.");
+        }
+    }
+
+    // Review body: metadata often lacks the key fact (e.g. nationality). Fetch it.
+    if (
+        !ctx.offline &&
+        reviewUrls.size > 0 &&
+        !evidence.some((item) => item.relation === "supports" || item.relation === "refutes")
+    ) {
+        for (const url of [...reviewUrls].slice(0, 2)) {
+            try {
+                const article = await ReadableText(url);
+                const match = matchingSentence(article, claim);
+                if (!match) continue;
+
+                const relation = (await classifySentences(claim.text, [match]))[0];
+                if (!relation) continue;
+
+                evidence.push({
+                    title: `Fact-check: ${hostOf(url)}`,
+                    publisher: hostOf(url),
+                    publishedAt: null,
+                    retrievedAt,
+                    url,
+                    excerpt: match.slice(0, 400),
+                    type: "fact_check",
+                    relation,
+                });
+                limitations.push("Sprawdzono treść artykułu fact-checkingowego.");
+                break;
+            } catch {
+                // One failed review page must not block other sources.
+            }
         }
     }
 

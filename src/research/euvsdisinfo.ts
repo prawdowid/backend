@@ -153,8 +153,8 @@ async function classifyCandidates(
             const pContradicts = contradicts?.type === "noul" ? contradicts.noul : 0;
 
             // Contradiction of the correction is the strongest signal.
-            if (pContradicts >= 0.8) return "refutes";
-            if (pConfirms >= 0.8) return "supports";
+            if (pContradicts >= 0.9) return "refutes";
+            if (pConfirms >= 0.85) return "supports";
             if (pSame >= 0.8) return "refutes";
             return null;
         });
@@ -191,7 +191,7 @@ export async function searchDisinfoCases(
 
     const ranked = cases
         .map((item) => ({ item, score: score(query, `${item.title} ${item.claim} ${item.fact}`) }))
-        .filter((entry) => entry.score >= 0.3)
+        .filter((entry) => entry.score >= 0.5)
         .sort((a, b) => b.score - a.score)
         .slice(0, limit);
 
