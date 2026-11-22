@@ -11,6 +11,7 @@
 
 import { GoogleFactCheck } from "../modules/google";
 import type { FactCheckClaim, FactCheckReview } from "../modules/google";
+import { Markdown } from "../modules/utils";
 import { searchSources } from "../sources";
 import type {
     ClaimInput,
@@ -26,6 +27,14 @@ import type {
 
 const CORPUS_LIMIT = 8;
 const EXCERPT_MAX = 400;
+/** Only hits this good are worth the cost of reading the actual page. */
+const CORPUS_MIN_SCORE = 0.45;
+/** Reading pages is slow and rate-limited: three per claim, in parallel. */
+const CONTENT_FETCH_LIMIT = 3;
+/** Markdown() has no AbortSignal, so we race it against this budget. */
+const CONTENT_FETCH_TIMEOUT_MS = 4000;
+/** A page can be a book; the matcher only needs the beginning. */
+const CONTENT_MAX_CHARS = 20_000;
 const GOOGLE_PAGE_SIZE = 5;
 const MODEL_ID = "deepseek/deepseek-v4.1-flash";
 const COST_PER_CLAIM_USD = 0.0002;
@@ -132,21 +141,39 @@ function mentions(haystack: string, tokens: string[]): number {
 }
 
 /**
- * A corpus hit may become "supports" only when its summary names the subject
- * and enough of the object. A similarity score alone never upgrades a hit.
+ * A page may become "supports" only when ONE readable sentence names the subject
+ * and enough of the object. Matching across a whole 20k-char homepage is how you
+ * get "supports" from a navigation menu, so the match is sentence-scoped.
+ * Polarity is decided by the caller: a match against a negated claim is evidence
+ * *against*.
  */
-function corpusMentionsClaim(haystack: string, claim: ClaimInput): boolean {
+function matchingSentence(content: string, claim: ClaimInput): string | null {
     const fact = claim.fact;
-    if (!fact) return false;
-    if (fact.neg) return false; // polarity unknown from a summary — stay at context
+    if (!fact) return null;
 
     const subject = keywordsOf(fact.s ?? "");
     const object = keywordsOf(String(fact.o ?? ""));
-    if (subject.length === 0 || object.length === 0) return false;
+    if (subject.length === 0 || object.length === 0) return null;
 
-    if (mentions(haystack, subject) === 0) return false;
     const needed = Math.max(1, Math.ceil(object.length * 0.5));
-    return mentions(haystack, object) >= needed;
+    const body = readableText(bodyOf(content));
+    const sentences = body.split(/(?<=[.!?])\s+|\n+/);
+
+    for (const raw of sentences) {
+        const sentence = raw.trim();
+        // Too short = menu crumbs; too long = a whole paragraph, not a claim.
+        if (sentence.length < 40 || sentence.length > 600) continue;
+        const normalized = normalizeText(sentence);
+        if (mentions(normalized, subject) === 0) continue;
+        if (mentions(normalized, object) < needed) continue;
+        return sentence;
+    }
+
+    return null;
+}
+
+function corpusMentionsClaim(haystack: string, claim: ClaimInput): boolean {
+    return matchingSentence(haystack, claim) !== null;
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +201,77 @@ function mapRating(raw: string | undefined): MappedRating | null {
 }
 
 // ---------------------------------------------------------------------------
+// page text (the actual document, not the manifest blurb)
+// ---------------------------------------------------------------------------
+
+/** Markdown() takes no AbortSignal; race it and abandon the slow call. */
+async function fetchPageText(url: string): Promise<string> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+            () => reject(new Error(`timeout after ${CONTENT_FETCH_TIMEOUT_MS} ms`)),
+            CONTENT_FETCH_TIMEOUT_MS,
+        );
+    });
+
+    try {
+        const text = await Promise.race([Markdown(url), timeout]);
+        return text.slice(0, CONTENT_MAX_CHARS);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
+/** Jina Reader prefixes the page with metadata; the document starts after it. */
+function bodyOf(content: string): string {
+    const marker = "Markdown Content:";
+    const index = content.indexOf(marker);
+    const body = index >= 0 ? content.slice(index + marker.length) : content;
+    return body.trim();
+}
+
+/** Links and markdown noise make a useless excerpt; keep the words. */
+function readableText(content: string): string {
+    return content
+        .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+        .replace(/https?:\/\/\S+/g, " ")
+        .replace(/[#*_>|`]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+/** The sentence that actually names the claim, or the page opening. */
+function excerptFromContent(content: string, claim: ClaimInput): string {
+    const fact = claim.fact;
+    const tokens = fact
+        ? [...keywordsOf(fact.s ?? ""), ...keywordsOf(String(fact.o ?? ""))]
+        : keywordsOf(claim.text ?? "");
+
+    const body = readableText(bodyOf(content));
+    const sentences = body.split(/(?<=[.!?])\s+/);
+    let best: string | null = null;
+    let bestScore = 0;
+
+    for (const sentence of sentences) {
+        const trimmed = sentence.trim();
+        if (!trimmed) continue;
+        const score = mentions(normalizeText(trimmed), tokens);
+        if (score > bestScore) {
+            best = trimmed;
+            bestScore = score;
+        }
+    }
+
+    return truncate(best ?? body);
+}
+
+function relationForMatch(claim: ClaimInput): EvidenceRelation {
+    // Never "supports" a negation: the page asserts the opposite.
+    return claim.fact?.neg === true ? "refutes" : "supports";
+}
+
+// ---------------------------------------------------------------------------
 // evidence builders
 // ---------------------------------------------------------------------------
 
@@ -197,6 +295,25 @@ function evidenceFromHit(hit: SourceHit, claim: ClaimInput, retrievedAt: string)
         excerpt: truncate(summary),
         type: doc.type,
         relation,
+    };
+}
+
+/** Same evidence, but judged on the fetched document text instead of the blurb. */
+function evidenceFromContent(
+    hit: SourceHit,
+    claim: ClaimInput,
+    content: string,
+    retrievedAt: string,
+): Evidence | null {
+    const base = evidenceFromHit(hit, claim, retrievedAt);
+    if (!base) return null;
+
+    const match = matchingSentence(content, claim);
+
+    return {
+        ...base,
+        excerpt: match ? match.slice(0, 400) : excerptFromContent(content, claim),
+        relation: match ? relationForMatch(claim) : "context",
     };
 }
 
@@ -360,13 +477,40 @@ async function researchOne(
     }
     if (hits.length === 0) limitations.push("Brak źródeł w lokalnym korpusie.");
 
-    const MIN_CORPUS_SCORE = 0.45;
-    for (const hit of hits) {
-        if (!Number.isFinite(hit.score) || hit.score < MIN_CORPUS_SCORE) continue;
-        const item = evidenceFromHit(hit, claim, retrievedAt);
-        if (!item) continue;
-        const key = item.url.toLowerCase();
+    const eligible = hits.filter(
+        (hit) => Number.isFinite(hit.score) && hit.score >= CORPUS_MIN_SCORE,
+    );
+
+    // Read the actual pages for the best hits; only verified docs, only online.
+    const pages = new Map<string, string>();
+    const toFetch = ctx.offline
+        ? []
+        : eligible.filter((hit) => hit.doc.verified === true).slice(0, CONTENT_FETCH_LIMIT);
+
+    if (toFetch.length > 0) {
+        const fetched = await Promise.allSettled(toFetch.map((hit) => fetchPageText(hit.doc.url)));
+        for (let i = 0; i < toFetch.length; i++) {
+            const hit = toFetch[i];
+            if (!hit) continue;
+            const result = fetched[i];
+            const text = result?.status === "fulfilled" ? result.value : "";
+            if (text.trim().length > 0) {
+                pages.set(hit.doc.url.toLowerCase(), text);
+            } else {
+                limitations.push(`Nie udało się pobrać treści źródła: ${hostOf(hit.doc.url)}.`);
+            }
+        }
+    }
+
+    for (const hit of eligible) {
+        const key = hit.doc.url.toLowerCase();
         if (seenUrls.has(key)) continue;
+        const content = pages.get(key);
+        const item =
+            content !== undefined
+                ? evidenceFromContent(hit, claim, content, retrievedAt)
+                : evidenceFromHit(hit, claim, retrievedAt);
+        if (!item) continue;
         seenUrls.add(key);
         evidence.push(item);
     }

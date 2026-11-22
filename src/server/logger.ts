@@ -5,7 +5,7 @@
  * and latencies live in memory for GET /metrics. Neither path may break a request:
  * a disk error is reported to stderr, never thrown at the caller.
  */
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile, mkdir, rename, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import type { ClaimVerdict, OutcomeStatus, Verdict } from "../pipeline/types";
 
@@ -61,8 +61,33 @@ let total = 0;
 let abstained = 0;
 let totalCostUsd = 0;
 
+/** Rotate verify.jsonl once it grows past this size: verify.jsonl -> verify.jsonl.1. */
+const ROTATE_BYTES = 20 * 1024 * 1024;
+/** Checking the file size on every line is wasteful; every 100th write is enough. */
+const ROTATE_CHECK_EVERY = 100;
+
 let dirReady: Promise<void> | undefined;
 let writeChain: Promise<void> = Promise.resolve();
+let writesSinceRotateCheck = 0;
+
+/** Best-effort rotation. Format of the log stays untouched; errors never bubble up. */
+async function rotateIfNeeded(): Promise<void> {
+    writesSinceRotateCheck += 1;
+    if (writesSinceRotateCheck < ROTATE_CHECK_EVERY) return;
+    writesSinceRotateCheck = 0;
+
+    try {
+        const info = await stat(LOG_FILE);
+        if (info.size <= ROTATE_BYTES) return;
+        await rename(LOG_FILE, `${LOG_FILE}.1`);
+        console.error(`[logger] rotacja: ${LOG_FILE} -> ${LOG_FILE}.1`);
+    } catch (error) {
+        const code = (error as { code?: string }).code;
+        if (code !== "ENOENT") {
+            console.error("[logger] rotacja nieudana:", (error as Error).message);
+        }
+    }
+}
 
 function ensureDir(): Promise<void> {
     if (!dirReady) {
@@ -116,6 +141,7 @@ export async function logVerification(entry: VerificationLogEntry): Promise<void
     writeChain = writeChain
         .then(async () => {
             await ensureDir();
+            await rotateIfNeeded();
             await appendFile(LOG_FILE, line, "utf8");
         })
         .catch((error: unknown) => {

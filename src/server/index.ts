@@ -21,11 +21,7 @@ const VALIDATION_LIMITATIONS = [
     "Nic nie zostało sprawdzone. To nie jest werdykt.",
 ];
 
-const BAD_INPUT = {
-    status: "error" as const,
-    summary: "Podaj tekst albo poprawny link.",
-    limitations: VALIDATION_LIMITATIONS,
-};
+const BAD_INPUT = errorResponse("Podaj tekst albo poprawny link.", VALIDATION_LIMITATIONS);
 
 const channelSchema = t.Optional(
     t.Union([t.Literal("web"), t.Literal("discord"), t.Literal("api"), t.Literal("sms")]),
