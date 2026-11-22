@@ -37,6 +37,18 @@ Invoke-RestMethod http://localhost:3000/verify -Method Post -ContentType "applic
   Select-Object @{n="verdict";e={$_.claims[0].verdict}}, @{n="excerpt";e={$_.claims[0].evidence[0].excerpt}}
 ```
 
+## 2b. Pytanie użytkownika (20 s)
+
+```powershell
+$body = @{ text = "Czy Polska przyjęła walutę euro w 2010 roku?" } | ConvertTo-Json
+Invoke-RestMethod http://localhost:3000/verify -Method Post -ContentType "application/json" -Body $body |
+  Select-Object summary, @{n="verdict";e={$_.claims[0].verdict}}, @{n="claim";e={$_.claims[0].claim}}
+```
+
+Oczekiwane: `false`, summary zaczyna się od „Nie.”, a `claim` to sprawdzona propozycja,
+nie powtórzone pytanie. Pytanie „Czy Demagog to sprawdził?” odpowiada osobno: szuka recenzji
+wskazanego wydawcy i podaje jej ocenę oraz link.
+
 ## 3. Korpus rządowy (20 s)
 
 ```powershell

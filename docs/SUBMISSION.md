@@ -66,6 +66,26 @@ WWW / API / bot Discord
   VerifyResponse: werdykt, dowody, ograniczenia, siła, koszt, czas
 ```
 
+## Pytania użytkownika
+
+Wejściem nie musi być twierdzenie. Pytanie „Czy …?” jest zamieniane na sprawdzalną
+propozycję (bez odpowiadania na nie w promptcie), a odpowiedź ma formę wprost:
+
+- `confirmed` → „Tak.” + uzasadnienie + link,
+- `false` → „Nie.” + uzasadnienie + link,
+- `misleading` → „Nie w pełni.”,
+- `insufficient_evidence` → „Nie udało mi się potwierdzić tej informacji.” + czego brakuje,
+- `not_verifiable` → „Tego nie da się rozstrzygnąć na podstawie dostępnych źródeł.”.
+
+Pytania o sam fact-check („Czy Demagog to sprawdził?”) są obsługiwane osobno: system szuka
+recenzji wskazanego wydawcy w Google Fact Check i odpowiada, czy publikacja istnieje, podając
+jej ocenę i link. Brak recenzji nie jest dowodem, że wydawca tego nie sprawdzał.
+
+Dla twierdzeń o narodowości sprawcy (np. „Strzelcem w Krakowie był Polak/Ukrainiec”) działa
+deterministyczny ekstraktor zdań z recenzji EUvsDisinfo: wyciąga narodowość przypisaną
+sprawcy i porównuje ją z twierdzeniem. Dzięki temu „Polak” daje `confirmed`, a „Ukrainiec”
+`false`, bez zgadywania przez model.
+
 ## Źródła i licencje
 
 - 135 rekordów, 48 domen, typy: `primary` (104), `secondary` (21), `fact_check` (10).
