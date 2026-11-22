@@ -17,6 +17,8 @@ import { OpenRouterWrapper } from "../modules/openrouter";
 import { searchSources } from "../sources";
 import { searchDisinfoCases } from "./euvsdisinfo";
 import { searchWeb } from "./search";
+import { wikidataEvidence } from "./wikidata";
+import { searchCorpusDocuments } from "./corpus-docs";
 import type {
     ClaimInput,
     ClaimVerdict,
@@ -344,14 +346,18 @@ type WikipediaPages = {
  * responses and enter a cooldown after a 429 instead of hammering per claim.
  */
 const WIKI_MIN_INTERVAL_MS = 300;
-const WIKI_COOLDOWN_MS = 30_000;
+const WIKI_JINA_INTERVAL_MS = 3000;
+const WIKI_COOLDOWN_MS = 5 * 60_000;
 const wikiCache = new Map<string, unknown>();
 let wikiQueue: Promise<void> = Promise.resolve();
 let wikiCooldownUntil = 0;
+/** After the first 429 we proxy everything through r.jina.ai for this process. */
+let wikiUseJina = false;
 
 function wikiGate(): Promise<void> {
+    const interval = wikiUseJina ? WIKI_JINA_INTERVAL_MS : WIKI_MIN_INTERVAL_MS;
     const next = wikiQueue.then(
-        () => new Promise<void>((resolve) => setTimeout(resolve, WIKI_MIN_INTERVAL_MS)),
+        () => new Promise<void>((resolve) => setTimeout(resolve, interval)),
     );
     wikiQueue = next.then(
         () => undefined,
@@ -360,15 +366,35 @@ function wikiGate(): Promise<void> {
     return next.then(() => undefined);
 }
 
+async function wikipediaViaJina(url: string): Promise<string> {
+    const key = process.env["JINA_API_KEY"];
+    const response = await fetch(`https://r.jina.ai/${url}`, {
+        headers: {
+            accept: "text/plain",
+            ...(key ? { authorization: `Bearer ${key}` } : {}),
+        },
+        signal: AbortSignal.timeout(20_000),
+    });
+
+    if (!response.ok) throw new Error(`Jina ${response.status}`);
+    const text = await response.text();
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start < 0 || end <= start) throw new Error("Jina: no JSON in response");
+    return text.slice(start, end + 1);
+}
+
 async function wikipediaJson<T>(url: string): Promise<T> {
     const cached = wikiCache.get(url);
     if (cached !== undefined) return cached as T;
 
-    if (Date.now() < wikiCooldownUntil) {
-        throw new Error("Wikipedia cooldown");
-    }
-
     await wikiGate();
+
+    if (wikiUseJina || Date.now() < wikiCooldownUntil) {
+        const data = JSON.parse(await wikipediaViaJina(url)) as T;
+        wikiCache.set(url, data);
+        return data;
+    }
 
     const response = await fetch(url, {
         headers: {
@@ -379,8 +405,12 @@ async function wikipediaJson<T>(url: string): Promise<T> {
     });
 
     if (response.status === 429) {
+        // Our IP is rate-limited: switch to the Jina reader proxy instead.
+        wikiUseJina = true;
         wikiCooldownUntil = Date.now() + WIKI_COOLDOWN_MS;
-        throw new Error("Wikipedia 429");
+        const data = JSON.parse(await wikipediaViaJina(url)) as T;
+        wikiCache.set(url, data);
+        return data;
     }
     if (!response.ok) throw new Error(`Wikipedia ${response.status}`);
 
@@ -648,8 +678,13 @@ function decide(params: {
 
     // 5. Sources against, nothing for.
     if (refutes.length > 0 && supports.length === 0) {
-        // A lone secondary refute is not enough for a `false` verdict.
-        if (refutes.length === 1 && refutes[0]!.type === "secondary") {
+        // A lone secondary refute is not enough for a `false` verdict — unless it
+        // comes from a structured knowledge base (Wikidata), which is deterministic.
+        if (
+            refutes.length === 1 &&
+            refutes[0]!.type === "secondary" &&
+            !/wikidata/i.test(refutes[0]!.publisher)
+        ) {
             return {
                 verdict: "insufficient_evidence",
                 confidence: 0.3,
@@ -764,6 +799,45 @@ async function researchOne(
         evidence.push(item);
     }
 
+    // --- a2) real document corpus (gov.pl, Policja, CERT, RSO) --------------
+    try {
+        const docHits = await searchCorpusDocuments(claim, 3);
+        if (docHits.length > 0) {
+            const relations = await classifySentences(
+                claim.text,
+                docHits.map((hit) => hit.sentence),
+            );
+
+            for (let index = 0; index < docHits.length; index++) {
+                const relation = relations[index];
+                if (!relation) continue;
+
+                const hit = docHits[index]!;
+                const key = hit.doc.url.toLowerCase();
+                if (seenUrls.has(key)) continue;
+                seenUrls.add(key);
+
+                const isOfficial = /^(govpl|policja|cert|rso)/i.test(hit.doc.source);
+                evidence.push({
+                    title: hit.doc.title.slice(0, 300),
+                    publisher: hit.doc.source,
+                    publishedAt: hit.doc.publishedAt,
+                    retrievedAt,
+                    url: hit.doc.url,
+                    excerpt: hit.sentence.slice(0, 400),
+                    type: isOfficial ? "primary" : "secondary",
+                    relation,
+                });
+            }
+
+            if (evidence.some((item) => item.relation !== "context")) {
+                limitations.push("Wykorzystano lokalny korpus dokumentów.");
+            }
+        }
+    } catch {
+        limitations.push("Lokalny korpus dokumentów był niedostępny.");
+    }
+
     // --- b) Google Fact Check ---------------------------------------------
     let googleUsed = false;
     const reviewVerdicts: Verdict[] = [];
@@ -839,6 +913,35 @@ async function researchOne(
             }
         } catch {
             limitations.push("Dostęp do Google Fact Check był ograniczony.");
+        }
+    }
+
+    // Wikidata: deterministic value lookup for factual relations.
+    if (
+        !ctx.offline &&
+        !evidence.some((item) => item.relation === "supports" || item.relation === "refutes")
+    ) {
+        try {
+            // Extraction may leave the year only in the text. Wikidata needs it to
+            // compare membership dates instead of just "is a member".
+            const year = (
+                `${claim.text} ${claim.quote ?? ""} ${claim.details ?? ""}`.match(
+                    /\b(1[89]\d{2}|20\d{2})\b/,
+                ) ?? []
+            )[1];
+            const lookupClaim =
+                claim.fact && !claim.fact.t && year
+                    ? { ...claim, fact: { ...claim.fact, t: year } }
+                    : claim;
+
+            const item = await wikidataEvidence(lookupClaim, retrievedAt);
+            if (item) {
+                seenUrls.add(item.url.toLowerCase());
+                evidence.push(item);
+                limitations.push("Wykorzystano Wikidata.");
+            }
+        } catch {
+            limitations.push("Wikidata była niedostępna.");
         }
     }
 

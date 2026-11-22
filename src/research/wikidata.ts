@@ -64,6 +64,8 @@ type PredicateSpec = {
     tolerance?: number;
     /** The object must be an instance of one of these classes. */
     valueClasses?: string[];
+    /** Used only to break ties between identical labels ("Kraków" the city vs a poem). */
+    descriptionHint?: RegExp;
     /** Human-readable property name for the evidence excerpt. */
     label: string;
 };
@@ -89,12 +91,14 @@ const SPECS = {
         kind: "entity",
         currentOnly: true,
         refuteOnAbsence: true,
+        descriptionHint: /(miasto|city|stolica|capital|town)/iu,
         label: "stolica",
     },
     memberOf: {
         property: P.memberOf,
         kind: "entity",
         refuteOnAbsence: true,
+        descriptionHint: /(organizacja|organization|sojusz|alliance|unia|union|państwo|country|wspólnota|community)/iu,
         label: "członkostwo",
     },
     currency: {
@@ -104,18 +108,21 @@ const SPECS = {
         refuteOnAbsence: true,
         // Q8142 = currency; filters out "euro" the currency symbol.
         valueClasses: ["Q8142"],
+        descriptionHint: /(walut|currency)/iu,
         label: "waluta",
     },
     seats: {
         property: P.numberOfSeats,
         kind: "number",
         tolerance: 0,
+        descriptionHint: /(parlament|parliament|izba|chamber|sejm)/iu,
         label: "liczba miejsc",
     },
     length: {
         property: P.length,
         kind: "number",
         tolerance: 0.02,
+        descriptionHint: /(rzeka|river|creek|stream|kanał|kanal|canal)/iu,
         label: "długość",
     },
     area: {
@@ -128,6 +135,7 @@ const SPECS = {
         property: P.successfulCandidate,
         kind: "entity",
         refuteOnAbsence: true,
+        descriptionHint: /(polityk|politician|prezydent|president|kandydat|candidate|osoba|person)/iu,
         label: "zwycięzca",
     },
     headOfState: {
@@ -135,12 +143,14 @@ const SPECS = {
         kind: "entity",
         // Historical office-holders are a list without reliable qualifiers.
         refuteOnAbsence: false,
+        descriptionHint: /(polityk|politician|prezydent|president|osoba|person)/iu,
         label: "głowa państwa",
     },
     headOfGovernment: {
         property: P.headOfGovernment,
         kind: "entity",
         refuteOnAbsence: false,
+        descriptionHint: /(polityk|politician|premier|prime minister|osoba|person)/iu,
         label: "szef rządu",
     },
     language: {
@@ -647,6 +657,12 @@ const ENGLISH_MONTHS: Record<string, number> = {
 function extractClaimDate(claim: ClaimInput): ClaimDate | null {
     const fact = claim.fact;
     const explicit = fact?.t?.trim() ?? "";
+    const yearOnly = explicit.match(/^(\d{4})$/);
+    if (yearOnly) {
+        const year = Number(yearOnly[1]);
+        if (Number.isFinite(year)) return { year };
+    }
+
     const iso = explicit.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (iso) {
         const year = Number(iso[1]);
@@ -754,6 +770,18 @@ async function labelFor(id: string): Promise<string> {
     const bundle = bundles.get(id);
     const label = bundle?.label && bundle.label !== id ? bundle.label : "";
     return label ? `${label} (${id})` : id;
+}
+
+async function labelsForIds(ids: string[]): Promise<string> {
+    const unique = [...new Set(ids)].slice(0, 3);
+    const bundles = await getEntities(unique);
+    return unique
+        .map((id) => {
+            const bundle = bundles.get(id);
+            const label = bundle?.label && bundle.label !== id ? bundle.label : "";
+            return label ? `${label} (${id})` : id;
+        })
+        .join(", ");
 }
 
 function round(value: number): number {
@@ -984,7 +1012,7 @@ export async function lookupWikidata(claim: ClaimInput): Promise<WikidataLookupR
 
         return {
             relation,
-            value: sourceText || String(quantities[0]?.value.type === "quantity" ? quantities[0].value.amount : ""),
+            value: sourceText,
             url,
             confidence: round(matched ? 0.88 : 0.84),
         };
@@ -1058,28 +1086,57 @@ export async function lookupWikidata(claim: ClaimInput): Promise<WikidataLookupR
     if (presentIds.size === 0) {
         if (!spec.refuteOnAbsence) return null;
         // Only refute when exactly one candidate could be the expected value.
-        // Prefer an exact label match: "Kraków" must not be confused with
-        // "Kraków — wiersz" or "Kraków — singel".
+        // Prefer an exact label match, then the description hint: "Kraków"
+        // the city must not be confused with "Kraków" the poem.
         let refuteCandidates = expectedHits;
+        const reference = orientation.direction === "forward"
+            ? String(fact.o ?? "")
+            : String(fact.s ?? "");
+
         if (refuteCandidates.length > 1) {
-            const reference = orientation.direction === "forward"
-                ? String(fact.o ?? "")
-                : String(fact.s ?? "");
             const exact = refuteCandidates.filter(
                 (hit) => fold(hit.label) === fold(reference),
             );
-            if (exact.length === 1) refuteCandidates = exact;
+            if (exact.length > 0) refuteCandidates = exact;
+        }
+        if (refuteCandidates.length > 1 && spec.descriptionHint) {
+            const described = refuteCandidates.filter((hit) =>
+                spec.descriptionHint!.test(hit.description),
+            );
+            if (described.length > 0) refuteCandidates = described;
         }
         if (refuteCandidates.length !== 1) return null;
         const only = refuteCandidates[0]!;
-        const sourceValue = await labelFor(only.id);
+
+        // Show what Wikidata actually says, not the expected value: "złoty",
+        // not "euro"; "Warszawa", not "Kraków".
+        const actualIds = [
+            ...new Set(
+                usable
+                    .filter((statement) => statement.value.type === "entity")
+                    .map((statement) =>
+                        statement.value.type === "entity" ? statement.value.id : "",
+                    )
+                    .filter((id) => id.length > 0),
+            ),
+        ];
+        const sourceValue =
+            actualIds.length > 0 && actualIds.length <= 3
+                ? await labelsForIds(actualIds)
+                : `brak (${spec.label})`;
+
         let relation: "supports" | "refutes" = "refutes";
         if (fact.neg === true) relation = "supports";
         return { relation, value: sourceValue, url, confidence: round(0.76) };
     }
 
     const [matchedId, matchedStatements] = [...presentIds.entries()][0]!;
-    const sourceLabel = await labelFor(matchedId);
+    // Prefer the label returned by the search: one less API call and it is the
+    // label the user actually sees.
+    const matchedHit = expectedHits.find((hit) => hit.id === matchedId);
+    const sourceLabel = matchedHit
+        ? `${matchedHit.label} (${matchedHit.id})`
+        : await labelFor(matchedId);
 
     // Date qualifiers (membership "since ...", position "from ...").
     let dateNote = "";

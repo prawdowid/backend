@@ -30,7 +30,7 @@ const USER_AGENT = "PrawdowidBot/1.0 (+https://github.com/hackathon/prawdowid; f
 const SEARCH_LIMIT = 5;
 const MAX_SEARCH_QUERIES = 4;
 const MAX_PAGES = 5;
-const MAX_SENTENCES = 20;
+const MAX_SENTENCES = 24;
 const MIN_SENTENCE = 20;
 const MAX_SENTENCE = 700;
 const REQUEST_TIMEOUT_MS = 6000;
@@ -370,12 +370,12 @@ function pickCandidates(claim: ClaimInput, pages: Array<{ title: string; text: s
     const phrases = relationPhrases(fact.p ?? "", fact.s ?? "");
     const perPage = 8;
 
-    const scored: Array<Candidate & { score: number; signal: boolean }> = [];
+    const scored: Array<Candidate & { score: number; signal: boolean; objectRelation: boolean }> = [];
     const seen = new Set<string>();
 
     for (const page of pages) {
         const sentences = sentencesOf(page.text);
-        const pageCandidates: Array<Candidate & { score: number; signal: boolean }> = [];
+        const pageCandidates: Array<Candidate & { score: number; signal: boolean; objectRelation: boolean }> = [];
 
         for (let index = 0; index < sentences.length; index++) {
             const sentence = sentences[index]!;
@@ -390,6 +390,7 @@ function pickCandidates(claim: ClaimInput, pages: Array<{ title: string; text: s
             const normalized = normalizeText(sentence);
             const relationHit = phrases.some((phrase) => mentions(normalized, keywordsOf(phrase)) > 0);
             const yearHit = /(?:19|20)\d{2}/.test(sentence);
+            const objectHit = mentions(normalized, keywordsOf(String(fact.o ?? ""))) > 0;
 
             seen.add(key);
             pageCandidates.push({
@@ -399,6 +400,7 @@ function pickCandidates(claim: ClaimInput, pages: Array<{ title: string; text: s
                 url: pageUrl(page.title),
                 score,
                 signal: relationHit && yearHit,
+                objectRelation: objectHit && relationHit,
             });
         }
 
@@ -421,7 +423,7 @@ function pickCandidates(claim: ClaimInput, pages: Array<{ title: string; text: s
     // Guarantee that each fetched page contributes at least two candidates;
     // one long article must not crowd out the page with the decisive sentence.
     const selected: Array<Candidate & { score: number }> = [];
-    const byPage = new Map<string, Array<Candidate & { score: number; signal: boolean }>>();
+    const byPage = new Map<string, Array<Candidate & { score: number; signal: boolean; objectRelation: boolean }>>();
     for (const entry of scored) {
         const list = byPage.get(entry.url) ?? [];
         list.push(entry);
@@ -437,6 +439,18 @@ function pickCandidates(claim: ClaimInput, pages: Array<{ title: string; text: s
     for (const list of byPage.values()) {
         const signals = list.filter((entry) => entry.signal && !signalKeys.has(`${entry.url}|${entry.sentence}`));
         for (const entry of signals.slice(0, 2)) {
+            if (selected.length >= MAX_SENTENCES) break;
+            selected.push(entry);
+            signalKeys.add(`${entry.url}|${entry.sentence}`);
+        }
+    }
+    // Definitions ("X jest stolicą Y") contain the object and the relation; keep
+    // one per page so a page full of historical trivia cannot hide it.
+    for (const list of byPage.values()) {
+        const definitions = list.filter(
+            (entry) => entry.objectRelation && !signalKeys.has(`${entry.url}|${entry.sentence}`),
+        );
+        for (const entry of definitions.slice(0, 1)) {
             if (selected.length >= MAX_SENTENCES) break;
             selected.push(entry);
             signalKeys.add(`${entry.url}|${entry.sentence}`);
@@ -511,10 +525,13 @@ async function classifyBindings(claim: ClaimInput, candidates: Candidate[]): Pro
     const recurring = /won|lost|wygra|przegra|election|wybory/i.test(fact.p ?? "");
     const timeRule =
         " Uwzględnij czas: zdanie o przeszłości nie przeczy twierdzeniu o teraźniejszości, " +
-        "chyba że wprost mówi, jaki jest stan obecny.";
-    const eventRule = recurring
+        "chyba że wprost mówi, jaki jest stan obecny.";    const eventRule = recurring
         ? " Inny rok tej samej cyklicznej relacji (np. inne wybory) nie jest sprzecznością."
         : "";
+    const presentRule = date
+        ? ""
+        : " Twierdzenie bez daty dotyczy teraźniejszości: zdanie o przeszłości " +
+          "(np. „w 1040 roku…”, „dawniej…”) NIE potwierdza go.";
 
     const baseQuestion = bindingQuestion(claim);
     const questions: Record<string, DecisionsNoulQuestion> = {};
@@ -529,6 +546,7 @@ async function classifyBindings(claim: ClaimInput, candidates: Candidate[]): Pro
                     "Odpowiedz tak tylko wtedy, gdy zdanie wiąże ten obiekt z tym podmiotem. " +
                     "Samo wystąpienie słów w zdaniu nie wystarcza — liczy się przypisanie." +
                     (date ? " Jeśli podano `date`, zdanie musi dotyczyć tego samego czasu." : "") +
+                    presentRule +
                     negated +
                     context,
                 subject,
