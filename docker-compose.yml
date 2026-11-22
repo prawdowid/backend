@@ -54,7 +54,7 @@ services:
       PORT: "3001"
       NODE_ENV: production
       # Adres używany wyłącznie po stronie serwera (SSR / route handler).
-      BACKEND_API_URL: http://backend:3000
+      BACKEND_API_URL: ${BACKEND_API_URL:-http://backend:3000}
       NEXT_PUBLIC_ANALYSIS_API_URL: ${NEXT_PUBLIC_ANALYSIS_API_URL:-/api/analyze}
     ports:
       - "3001:3001"
