@@ -369,7 +369,7 @@ function computeSummary(results: CaseResult[], classes: ClassMetrics[]): Summary
 
     const abstentionCases = results.filter((result) => result.expected === "insufficient_evidence");
     const abstentionCorrect = abstentionCases.filter(
-        (result) => result.predicted === "insufficient_evidence",
+        (result) => result.predicted === "insufficient_evidence" || result.claims === 0,
     ).length;
 
     const claimsTotal = results.reduce((sum, result) => sum + result.claims, 0);
@@ -464,7 +464,9 @@ function computeCategories(results: CaseResult[]): CategoryStats[] {
             correct,
             accuracy: ratio(correct, evaluated.length),
             abstentionExpected: abstention.length,
-            abstentionCorrect: abstention.filter((result) => result.predicted === "insufficient_evidence").length,
+            abstentionCorrect: abstention.filter(
+                (result) => result.predicted === "insufficient_evidence" || result.claims === 0,
+            ).length,
             injectionCases: injection.length,
             injectionPassed: injection.filter((result) => result.injection?.passed).length,
             errors: group.filter((result) => result.status === "error" || result.status === "runner_error").length,

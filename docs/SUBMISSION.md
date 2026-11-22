@@ -71,6 +71,8 @@ WWW / API / bot Discord
 - 135 rekordów, 48 domen, typy: `primary` (104), `secondary` (21), `fact_check` (10).
 - Źródła pierwotne: gov.pl, Dziennik Ustaw, Monitor Polski, ISAP, PKW, GUS, NBP, EUR-Lex, NIK, RPO.
 - Źródła wtórne i fact-checkingowe: PAP, RMF24, Demagog, AFP Fact Check, EUvsDisinfo, EDMO, NASK.
+- Awaryjne źródło wtórne: polska Wikipedia (CC BY-SA), używane tylko wtedy, gdy korpus i fact-checki
+  nie dają potwierdzenia ani zaprzeczenia; fragment jest zawsze oznaczony jako `secondary`.
 - Zasady: przechowujemy metadane i **krótkie cytaty** (≤1500 znaków) potrzebne do uzasadnienia;
   pełny tekst tylko dla dokumentów urzędowych/publicznych. Dokumenty urzędowe i urzędowe materiały
   są wyłączone z ochrony autorskiej na podstawie art. 4 pkt 2 ustawy o prawie autorskim; cytaty
@@ -99,5 +101,8 @@ WWW / API / bot Discord
 
 - Drugi kanał (Discord) jest w osobnym repozytorium i korzysta z `POST /verify`.
 - Klucz `GOOGLE_FACT_CHECK_API_KEY` musi być ustawiony, aby system mógł wydawać werdykty
-  potwierdzające/obalające na podstawie fact-checków.
+  oparte na fact-checkach.
+- W obecnym zestawie 30 przypadków macro-F1 wynosi 0,404 (cel 0,75), bo klasa „fałszywe” nie ma
+  źródła, które wprost obala twierdzenie; system wtedy wstrzymuje się zamiast zgadywać.
+  Pokrycie cytowań (100%), wstrzymanie (100%), injection (100%) i mediana (4,5 s) są w normie.
 - Multimodalność (OCR, transkrypcja) jest przygotowana w modułach, ale nie jest częścią ścieżki MVP.

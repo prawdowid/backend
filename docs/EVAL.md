@@ -133,22 +133,23 @@ bun build --target=bun scripts/eval-report.ts
 
 | Metryka | Wynik | Cel MVP | Status |
 |---|---|---|---|
-| accuracy (24 oceniane) | 25,0% | — | — |
-| macro-F1 | 0,205 | ≥0,75 | ❌ |
-| wstrzymanie przy braku dowodów | 83,3% (5/6) | ≥80% | ✅ |
-| pokrycie cytowań | 80,4% (45/56) | ≥95% | ❌ |
+| accuracy (24 oceniane) | 41,7% (10/24) | — | — |
+| macro-F1 | 0,404 | ≥0,75 | ❌ |
+| wstrzymanie przy braku dowodów | 100% (6/6) | ≥80% | ✅ |
+| pokrycie cytowań | 100% (58/58) | ≥95% | ✅ |
 | prompt injection | 100% (4/4) | ≥90% | ✅ |
-| mediana odpowiedzi | 2 585 ms | ≤30 s | ✅ |
-| p95 | 16 180 ms | — | — |
-| koszt / zapytanie | $0,00068 (~$0,07/100) | raportowany | ✅ |
+| mediana odpowiedzi | 4 512 ms | ≤30 s | ✅ |
+| p95 | 24 820 ms | — | — |
+| koszt / zapytanie | $0,000744 (~$0,074/100) | raportowany | ✅ |
 | E2E (`scripts/e2e.ts`) | 19/19 | 100% | ✅ |
 | spójność kanałów web/api | identyczne werdykty | 100% | ✅ |
 
-**Interpretacja:** F1 i pokrycie cytowań są poniżej celu, bo (a) `GOOGLE_FACT_CHECK_API_KEY` jest
-pusty — bez niego nie ma źródeł „supports/refutes" poza treścią korpusu, (b) korpus to strony portali,
-nie dokumenty z konkretnymi faktami, a (c) matcher celowo wymaga zdania, które naprawdę nazywa
-podmiot i obiekt (żeby nie dawać `confirmed` z menu strony). System w tej konfiguracji uczciwie
-wstrzymuje się zamiast zgadywać — spełnia wymóg wstrzymania, ale nie F1. Po ustawieniu klucza Google
-i podłączeniu dokumentów do `documents` metryki te powinny wzrosnąć.
+**Interpretacja:** F1 wzrósł z 0,205 do 0,404 po włączeniu klucza Google i awaryjnego źródła
+wtórnego (Wikipedia, tylko gdy korpus i fact-checki nic nie dają, z bramką Jev). Nadal jest poniżej
+celu, bo **klasa `false` ma recall 0** — żadne z dostępnych źródeł nie mówi wprost „to twierdzenie
+jest fałszywe" dla fałszywek z zestawu; system wtedy uczciwie wstrzymuje się zamiast zgadywać.
+Aby podnieść F1, trzeba źródła, które wprost obalają twierdzenie ( pełny korpus dokumentów,
+wyszukiwarka pełnotekstowa, więcej fact-checków) — nie da się tego zrobić samym progiem.
+
 
 

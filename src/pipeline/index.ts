@@ -77,6 +77,12 @@ export type PipelineResult = {
 const MATCH_THRESHOLD = 0.8;
 const SHORTLIST_SIZE = 10;
 
+/** Extraction model list prices, USD per 1M tokens (OpenRouter, 2026-11). */
+const EXTRACT_IN_USD_PER_M = 0.05;
+const EXTRACT_OUT_USD_PER_M = 0.199;
+/** Embedding list price, USD per 1M tokens. */
+const EMBED_USD_PER_M = 0.01;
+
 const DEBUG = process.env["PIPELINE_DEBUG"] === "1";
 
 function mark(label: string, startedAt: number): void {
@@ -206,18 +212,25 @@ function activeAt(entry: CachedClaim, asOf: string): boolean {
     return from <= asOf && asOf <= to;
 }
 
-async function extractClaims(text: string): Promise<{ lang: string; date: string | null; claims: Claim[] }> {
+async function extractClaims(
+    text: string,
+): Promise<{ lang: string; date: string | null; claims: Claim[]; costUsd: number }> {
     // Strip the delimiter so user content cannot break out of the data block.
     const safeText = text.replace(/<\/?ARTICLE>/gi, "");
     const user = `<ARTICLE>\n${safeText}\n</ARTICLE>`;
     let parsed: Summarize | undefined;
+    let promptTokens = 0;
+    let completionTokens = 0;
 
     for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
-        const raw = await OpenRouterWrapper.Chat(user, {
+        const response = await OpenRouterWrapper.ChatDetailed(user, {
             system: MASTERPROMPT,
             reasoning: false,
             maxTokens: 8000,
         });
+        promptTokens += response.promptTokens;
+        completionTokens += response.completionTokens;
+        const raw = response.text;
 
         try {
             parsed = JSON.parse(stripFence(raw ?? "")) as Summarize;
@@ -255,7 +268,13 @@ async function extractClaims(text: string): Promise<{ lang: string; date: string
         }
     }
 
-    return { lang: parsed.lang ?? "pl", date: parsed.date ?? null, claims };
+    return {
+        lang: parsed.lang ?? "pl",
+        date: parsed.date ?? null,
+        claims,
+        costUsd:
+            (promptTokens * EXTRACT_IN_USD_PER_M + completionTokens * EXTRACT_OUT_USD_PER_M) / 1_000_000,
+    };
 }
 
 function shortlist(candidates: CachedClaim[], query: number[]): CachedClaim[] {
@@ -283,6 +302,7 @@ export async function runPipeline(
             instructions: "Does this text contain political or propaganda statements?",
         } satisfies DecisionsNoulQuestion,
     });
+    let actualCostUsd = gate.usage?.cost ?? 0;
     mark("gate", stage);
 
     const politicalAnswer = gate.answers["political"];
@@ -293,7 +313,8 @@ export async function runPipeline(
 
     // Stage 2: master prompt -> facts -> atomic claims.
     stage = Date.now();
-    const { lang, date, claims } = await extractClaims(text);
+    const { lang, date, claims, costUsd: extractCostUsd } = await extractClaims(text);
+    actualCostUsd += extractCostUsd;
     mark(`extract (${claims.length} claims)`, stage);
 
     if (claims.length === 0) {
@@ -306,6 +327,7 @@ export async function runPipeline(
             hits: [],
             misses: [],
             injectionSuspected,
+            costUsd: actualCostUsd,
         };
     }
 
@@ -355,6 +377,7 @@ export async function runPipeline(
             },
             questions,
         );
+        actualCostUsd += result.usage?.cost ?? 0;
         mark(`jev match (${Object.keys(questions).length / 2} claims)`, stage);
 
         for (const claim of claims) {
@@ -378,11 +401,10 @@ export async function runPipeline(
         }
     }
 
-    const approxTokens = (chars: number) => chars / 3.5;
-    const costUsd =
-        (approxTokens(text.length) * 0.042 + approxTokens(text.length + MASTERPROMPT.length) * 0.05) / 1_000_000 +
-        ((claims.length * 60) * 0.199) / 1_000_000 +
-        (approxTokens(claims.reduce((sum, claim) => sum + claim.text.length, 0)) * 0.01) / 1_000_000;
+    // Embeddings are the only estimated part (the endpoint is cheap and per-token
+    // usage is not surfaced through the current wrapper).
+    const embedChars = claims.reduce((sum, claim) => sum + claim.text.length, 0);
+    const costUsd = actualCostUsd + ((embedChars / 3.5) * EMBED_USD_PER_M) / 1_000_000;
 
     return {
         status: misses.length > 0 ? "needs_research" : "done",

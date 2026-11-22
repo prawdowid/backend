@@ -38,6 +38,14 @@ export class OpenRouterWrapper {
 
     /** Plain chat completion on OpenRouter; extraction/JSON tasks. */
     public static async Chat(user: string, options: ChatOptions = {}): Promise<string> {
+        return (await OpenRouterWrapper.ChatDetailed(user, options)).text;
+    }
+
+    /** Same as Chat, but returns token usage so callers can report real cost. */
+    public static async ChatDetailed(
+        user: string,
+        options: ChatOptions = {},
+    ): Promise<{ text: string; promptTokens: number; completionTokens: number; model: string }> {
         const res = await this.getClient().chat.send({
             chatRequest: {
                 model:
@@ -64,7 +72,12 @@ export class OpenRouterWrapper {
             );
         }
 
-        return text;
+        return {
+            text,
+            promptTokens: res.usage?.promptTokens ?? 0,
+            completionTokens: res.usage?.completionTokens ?? 0,
+            model: res.model,
+        };
     }
 
     /** One vector for one string. */

@@ -11,7 +11,9 @@
 
 import { GoogleFactCheck } from "../modules/google";
 import type { FactCheckClaim, FactCheckReview } from "../modules/google";
+import type { DecisionsNoulQuestion } from "@openrouter/sdk/models";
 import { Markdown } from "../modules/utils";
+import { OpenRouterWrapper } from "../modules/openrouter";
 import { searchSources } from "../sources";
 import type {
     ClaimInput,
@@ -178,6 +180,52 @@ function corpusMentionsClaim(haystack: string, claim: ClaimInput): boolean {
     return matchingSentence(haystack, claim) !== null;
 }
 
+/**
+ * Loose relevance check for a *claim sentence* (e.g. a Google fact-check claim).
+ * No sentence-length window: the text is already one claim.
+ */
+function textNamesClaim(text: string, claim: ClaimInput): boolean {
+    const fact = claim.fact;
+    if (!fact) return false;
+
+    const subject = keywordsOf(fact.s ?? "");
+    const object = keywordsOf(String(fact.o ?? ""));
+    if (subject.length === 0 || object.length === 0) return false;
+
+    const normalized = normalizeText(text);
+    if (mentions(normalized, subject) === 0) return false;
+    return mentions(normalized, object) >= Math.max(1, Math.ceil(object.length * 0.5));
+}
+
+/** Jev gate: a search hit must assert the same proposition, not just the topic. */async function sameProposition(claimText: string, candidates: string[]): Promise<boolean[]> {
+    if (candidates.length === 0) return [];
+
+    const questions: Record<string, DecisionsNoulQuestion> = {};
+    candidates.forEach((candidate, index) => {
+        questions[`p${index}`] = {
+            type: "noul",
+            instructions: {
+                question:
+                    "Does `candidate` assert exactly the same proposition as `claim`? " +
+                    "Same subject, same relation, same object, same polarity, same date. " +
+                    "A related topic, a broader statement, or the opposite claim is NOT a match.",
+                claim: claimText,
+                candidate,
+            },
+        };
+    });
+
+    try {
+        const result = await OpenRouterWrapper.Jev({ claim: claimText, candidates }, questions);
+        return candidates.map((_candidate, index) => {
+            const answer = result.answers[`p${index}`];
+            return answer?.type === "noul" && answer.noul >= 0.8;
+        });
+    } catch {
+        return candidates.map(() => false);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // rating -> verdict
 // ---------------------------------------------------------------------------
@@ -283,6 +331,130 @@ function relationForMatch(claim: ClaimInput, sentence: string): EvidenceRelation
 // ---------------------------------------------------------------------------
 // evidence builders
 // ---------------------------------------------------------------------------
+
+type WikipediaSearch = { query?: { search?: Array<{ title: string }> } };
+type WikipediaPages = {
+    query?: { pages?: Record<string, { title?: string; extract?: string }> };
+};
+
+async function wikipediaJson<T>(url: string): Promise<T> {
+    const response = await fetch(url, {
+        headers: {
+            "user-agent": "PrawdowidBot/1.0 (fact-checking prototype)",
+            accept: "application/json",
+        },
+        signal: AbortSignal.timeout(6000),
+    });
+    if (!response.ok) throw new Error(`Wikipedia ${response.status}`);
+    return (await response.json()) as T;
+}
+
+async function classifySentences(
+    claimText: string,
+    sentences: string[],
+): Promise<Array<"supports" | "refutes" | null>> {
+    if (sentences.length === 0) return [];
+
+    const questions: Record<string, DecisionsNoulQuestion> = {};
+    sentences.forEach((sentence, index) => {
+        questions[`s${index}_yes`] = {
+            type: "noul",
+            instructions: {
+                question:
+                    "Does `sentence` confirm `claim`? Only when it asserts the same proposition. " +
+                    "A related statement, a partial statement, or a mere mention is false.",
+                claim: claimText,
+                sentence,
+            },
+        };
+        questions[`s${index}_no`] = {
+            type: "noul",
+            instructions: {
+                question:
+                    "Does `sentence` contradict `claim`? Only when it asserts the opposite. " +
+                    "A related statement, a partial statement, or a mere mention is false.",
+                claim: claimText,
+                sentence,
+            },
+        };
+    });
+
+    try {
+        const result = await OpenRouterWrapper.Jev({ claim: claimText, sentences }, questions);
+        return sentences.map((_sentence, index) => {
+            const yes = result.answers[`s${index}_yes`];
+            const no = result.answers[`s${index}_no`];
+            const pYes = yes?.type === "noul" ? yes.noul : 0;
+            const pNo = no?.type === "noul" ? no.noul : 0;
+            if (pYes >= 0.8 && pYes > pNo) return "supports";
+            if (pNo >= 0.8 && pNo > pYes) return "refutes";
+            return null;
+        });
+    } catch {
+        return sentences.map(() => null);
+    }
+}
+
+/**
+ * Secondary source: Polish Wikipedia. Only used when corpus + fact-checks gave
+ * no supports/refutes, and only when a single sentence names subject and object
+ * and Jev confirms that the sentence actually supports or refutes the claim.
+ * Labelled `secondary` and surfaced as a limitation.
+ */
+async function wikipediaEvidence(claim: ClaimInput, retrievedAt: string): Promise<Evidence[]> {
+    const fact = claim.fact;
+    if (!fact) return [];
+
+    const query = `${fact.s} ${fact.o}`.trim();
+    if (query.length < 3) return [];
+
+    const search = await wikipediaJson<WikipediaSearch>(
+        `https://pl.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&srlimit=2&format=json&origin=*`,
+    );
+    const titles = (search.query?.search ?? []).map((item) => item.title).slice(0, 2);
+
+    const candidates: Array<{ title: string; entryTitle: string; sentence: string }> = [];
+    for (const title of titles) {
+        const page = await wikipediaJson<WikipediaPages>(
+            `https://pl.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&redirects=1&titles=${encodeURIComponent(title)}&format=json&origin=*`,
+        );
+        const entry = Object.values(page.query?.pages ?? {})[0];
+        const text = entry?.extract ?? "";
+        if (text.length === 0) continue;
+
+        const match = matchingSentence(text, claim);
+        if (!match) continue;
+        candidates.push({ title, entryTitle: entry?.title ?? title, sentence: match });
+        if (candidates.length >= 2) break;
+    }
+
+    if (candidates.length === 0) return [];
+
+    const relations = await classifySentences(
+        claim.text,
+        candidates.map((candidate) => candidate.sentence),
+    );
+
+    const found: Evidence[] = [];
+    for (let index = 0; index < candidates.length; index++) {
+        const relation = relations[index];
+        const candidate = candidates[index]!;
+        if (!relation) continue;
+
+        found.push({
+            title: `Wikipedia: ${candidate.entryTitle}`,
+            publisher: "Wikipedia (pl)",
+            publishedAt: null,
+            retrievedAt,
+            url: `https://pl.wikipedia.org/wiki/${encodeURIComponent(candidate.title.replace(/ /g, "_"))}`,
+            excerpt: candidate.sentence.slice(0, 400),
+            type: "secondary",
+            relation,
+        });
+    }
+
+    return found;
+}
 
 type EvidenceDraft = { evidence: Evidence; mapped: Verdict | null };
 
@@ -404,10 +576,10 @@ function decide(params: {
         };
     }
 
-    // 4. Exactly one source: only a primary source can carry a weak confirmation.
-    if (supports.length === 1 && refutes.length === 0) {
-        const single = supports[0]!;
-        if (single.type === "primary") {
+    // 4. One or more matching sources without any refute.
+    if (supports.length >= 1 && refutes.length === 0) {
+        const hasPrimary = supports.some((item) => item.type === "primary");
+        if (hasPrimary) {
             return {
                 verdict: "confirmed",
                 confidence: 0.5,
@@ -415,6 +587,17 @@ function decide(params: {
                     "Jedno źródło pierwotne potwierdza to twierdzenie. To wciąż za mało, aby mówić o pewności.",
             };
         }
+        if (supports.every((item) => item.type === "secondary")) {
+            return {
+                verdict: "confirmed",
+                confidence: 0.55,
+                reasoning:
+                    "Potwierdza to źródło wtórne, a Jev uznał fragment za zgodny z twierdzeniem. Siła dowodu jest ograniczona.",
+            };
+        }
+    }
+
+    if (supports.length === 1 && refutes.length === 0) {
         return {
             verdict: "insufficient_evidence",
             confidence: 0.3,
@@ -538,14 +721,56 @@ async function researchOne(
     if (ctx.offline) {
         limitations.push("Tryb offline — pominięto Google Fact Check.");
     } else {
-        try {
-            const response = await GoogleFactCheck.Search(claim.text, {
-                languageCode: "pl",
-                pageSize: GOOGLE_PAGE_SIZE,
-            });
-            googleUsed = true;
+        const fact = claim.fact;
+        const queries = [
+            claim.text,
+            fact ? `${fact.s} ${fact.o}` : "",
+            fact ? `${fact.s} ${fact.p.replace(/_/g, " ")} ${fact.o}` : "",
+        ]
+            .map((query) => query.trim())
+            .filter((query, index, all) => query.length > 0 && all.indexOf(query) === index)
+            .slice(0, 3);
 
-            for (const parent of response.claims ?? []) {
+        const parents: FactCheckClaim[] = [];
+        const seenTexts = new Set<string>();
+
+        try {
+            for (const query of queries) {
+                const response = await GoogleFactCheck.Search(query, {
+                    languageCode: "pl",
+                    pageSize: GOOGLE_PAGE_SIZE,
+                });
+                googleUsed = true;
+
+                for (const parent of response.claims ?? []) {
+                    if (!parent.text || (parent.claimReview?.length ?? 0) === 0) continue;
+                    const key = normalizeText(parent.text);
+                    if (!key || seenTexts.has(key)) continue;
+                    seenTexts.add(key);
+                    parents.push(parent);
+                }
+
+                if (parents.length >= 8) break;
+            }
+
+            // A search hit is not a review of *this* claim. Keep only reviews whose
+            // claim asserts the same proposition (Jev gate, same idea as cache match).
+            let accepted = parents;
+            if (parents.length > 0) {
+                const flags = await sameProposition(
+                    claim.text,
+                    parents.map((parent) => parent.text),
+                );
+                accepted = parents.filter((_parent, index) => flags[index] === true);
+                if (process.env["PIPELINE_DEBUG"] === "1") {
+                    console.log(
+                        `[research] fact-check candidates=${parents.length} accepted=${accepted.length}`,
+                        accepted.map((parent) => parent.text.slice(0, 90)),
+                    );
+                }
+            }
+
+            for (const parent of accepted) {
                 for (const review of parent.claimReview ?? []) {
                     const draft = evidenceFromReview(review, parent, retrievedAt);
                     if (!draft) continue;
@@ -564,6 +789,33 @@ async function researchOne(
             }
         } catch {
             limitations.push("Dostęp do Google Fact Check był ograniczony.");
+        }
+    }
+
+    // Secondary fallback: Wikipedia, only when nothing supports/refutes the claim.
+    if (!ctx.offline && !evidence.some((item) => item.relation === "supports" || item.relation === "refutes")) {
+        try {
+            const wiki = await wikipediaEvidence(claim, retrievedAt);
+            for (const item of wiki) {
+                const key = item.url.toLowerCase();
+                if (seenUrls.has(key)) continue;
+                seenUrls.add(key);
+                evidence.push(item);
+            }
+            if (wiki.length > 0) limitations.push("Wykorzystano źródło wtórne (Wikipedia).");
+        } catch {
+            limitations.push("Wikipedia była niedostępna.");
+        }
+    }
+
+    // Citation fallback: even when nothing proves or refutes the claim, show the
+    // closest source as context so the user can judge it. Never upgraded to proof.
+    if (evidence.length === 0 && hits.length > 0) {
+        const best = hits[0]!;
+        const item = evidenceFromHit(best, claim, retrievedAt);
+        if (item) {
+            evidence.push(item);
+            limitations.push("Dostępne źródła dotyczą tematu, ale nie potwierdzają wprost twierdzenia.");
         }
     }
 
