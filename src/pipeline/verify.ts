@@ -125,11 +125,11 @@ export async function verifyInput(
         };
     }
 
+    const bareUrl = /^https?:\/\/\S+$/i.test(text);
+    const targetUrl = url || (bareUrl ? text : "");
+
     try {
-        // A bare URL in the text field is treated as a link to fetch. An explicit
-        // url always wins over surrounding text ("sprawdź to: https://...").
-        const bareUrl = /^https?:\/\/\S+$/i.test(text);
-        const targetUrl = url || (bareUrl ? text : "");
+        // An explicit url always wins over surrounding text ("sprawdź to: https://...").
         const content = targetUrl ? await Markdown(targetUrl) : text;
         const pipeline = await runPipeline(content, cache, { asOf: options.asOf });
         const claims: ClaimVerdict[] = [];
@@ -149,7 +149,9 @@ export async function verifyInput(
                         ? "Twierdzenie jest zgodne z wpisem w bazie zweryfikowanych informacji."
                         : verdict === "false"
                           ? "Twierdzenie jest sprzeczne z wpisem w bazie zweryfikowanych informacji."
-                          : "Twierdzenie częściowo pokrywa się z wpisem w bazie; wymaga ostrożności.",
+                          : verdict === "misleading"
+                            ? "Twierdzenie częściowo pokrywa się z wpisem w bazie; wymaga ostrożności."
+                            : "Wpis w bazie nie rozstrzyga tego twierdzenia.",
                 evidence: cachedEvidence(hit.claim.text, hit.cached.sources, verdict, hit.cached.checkedAt),
                 limitations: verdict === "insufficient_evidence" ? ["Wpis w bazie nie rozstrzyga twierdzenia."] : [],
                 asOf: pipeline.date ?? options.asOf ?? new Date().toISOString().slice(0, 10),
@@ -158,11 +160,15 @@ export async function verifyInput(
         }
 
         const pending = pipeline.claims.filter((claim) => !covered.has(claim.id));
+        let researchCost = 0;
+        const researchModels: string[] = [];
         if (pending.length > 0) {
             const researched = await researchClaims(pending, {
                 asOf: pipeline.date ?? options.asOf,
             });
             claims.push(...researched.claims);
+            researchCost = researched.costUsd;
+            researchModels.push(...researched.models);
         }
 
         const sourcesUsed = [...new Set(claims.flatMap((claim) => claim.evidence.map((e) => e.url)))];
@@ -177,27 +183,28 @@ export async function verifyInput(
             status: "ok",
             language: "pl",
             input: {
-                kind: url && !text ? "url" : "text",
+                kind: targetUrl ? "url" : "text",
                 preview: (url || text).slice(0, 240),
             },
             summary: countSummary(claims),
             claims,
             limitations,
             timingMs: Date.now() - started,
-            costUsd: pipeline.costUsd ?? 0,
-            models: [...new Set(pipeline.models ?? [])],
+            costUsd: (pipeline.costUsd ?? 0) + researchCost,
+            models: [...new Set([...(pipeline.models ?? []), ...researchModels])],
             sourcesUsed,
             sessionId: randomUUID(),
             disclaimer: DISCLAIMER_PL,
         };
     } catch (error) {
+        console.error("[verify] technical failure:", (error as Error).message);
         return {
             status: "error",
             language: "pl",
-            input: { kind: url && !text ? "url" : "text", preview: (url || text).slice(0, 200) },
+            input: { kind: targetUrl ? "url" : "text", preview: (targetUrl || text).slice(0, 200) },
             summary: "Nie udało się wykonać sprawdzenia. To nie jest werdykt.",
             claims: [],
-            limitations: [(error as Error).message.slice(0, 300)],
+            limitations: ["Błąd techniczny po stronie serwera. Spróbuj ponownie później."],
             timingMs: Date.now() - started,
             costUsd: 0,
             models: [],

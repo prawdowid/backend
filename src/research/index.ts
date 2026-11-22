@@ -184,9 +184,9 @@ function evidenceFromHit(hit: SourceHit, claim: ClaimInput, retrievedAt: string)
     if (!doc || !doc.url) return null;
 
     const summary = doc.summary ?? "";
-    const relation: EvidenceRelation = corpusMentionsClaim(normalizeText(summary), claim)
-        ? "supports"
-        : "context";
+    // A manifest summary describes what the page is, not what it asserts.
+    // It can point the user to a source, but it is never proof of the claim.
+    const relation: EvidenceRelation = "context";
 
     return {
         title: truncate(doc.title || doc.publisher || doc.url, 200),
@@ -360,7 +360,9 @@ async function researchOne(
     }
     if (hits.length === 0) limitations.push("Brak źródeł w lokalnym korpusie.");
 
+    const MIN_CORPUS_SCORE = 0.45;
     for (const hit of hits) {
+        if (!Number.isFinite(hit.score) || hit.score < MIN_CORPUS_SCORE) continue;
         const item = evidenceFromHit(hit, claim, retrievedAt);
         if (!item) continue;
         const key = item.url.toLowerCase();
@@ -425,9 +427,15 @@ async function researchOne(
     // Planned / hypothetical claims need a date to be checkable at all.
     const mode = (claim.fact?.m ?? "").toLowerCase();
     const isPlanned = mode === "planned" || mode === "hypothetical";
+    const plannedDate = claim.fact?.t ?? null;
+    const plannedInFuture = isPlanned && plannedDate !== null && plannedDate > ctx.asOf;
     const hasDateEvidence =
         Boolean(claim.fact?.t) ||
         evidence.some((item) => item.publishedAt !== null && item.relation !== "context");
+
+    if (plannedInFuture) {
+        limitations.push("To zdarzenie zaplanowane na przyszłość — nie można go potwierdzić na dzień sprawdzenia.");
+    }
 
     const decision = decide({
         factCheckVerdict,
@@ -436,7 +444,7 @@ async function researchOne(
         supports,
         refutes,
         hasAnyEvidence: evidence.length > 0,
-        notVerifiable: isPlanned && !hasDateEvidence,
+        notVerifiable: (isPlanned && !hasDateEvidence) || plannedInFuture,
     });
 
     // Rule: a lone non-primary support does not confirm — demote it to context.

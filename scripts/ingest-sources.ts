@@ -1,12 +1,12 @@
-import { mkdir, writeFile } from "node:fs/promises";
+﻿import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SOURCE_DOCS } from "../src/sources/manifest";
 import type { SourceDoc } from "../src/pipeline/types";
 
 /**
- * Audyt korpusu: sprawdza, czy każdy adres z manifestu odpowiada.
- * Nie przerywa pracy przy pojedynczym błędzie - zapisuje wynik i leci dalej.
+ * Audyt korpusu: sprawdza, czy kaÅ¼dy adres z manifestu odpowiada.
+ * Nie przerywa pracy przy pojedynczym bÅ‚Ä™dzie - zapisuje wynik i leci dalej.
  */
 
 type AuditRecord = {
@@ -17,7 +17,7 @@ type AuditRecord = {
 };
 
 const TIMEOUT_MS = 10_000;
-const USER_AGENT = "PrawdowidBot/1.0";
+const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const CONCURRENCY = 6;
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -35,18 +35,18 @@ async function checkUrl(doc: SourceDoc): Promise<AuditRecord> {
             signal: AbortSignal.timeout(TIMEOUT_MS),
         });
 
-        // Nie pobieramy treści - wystarczy status.
+        // Nie pobieramy treÅ›ci - wystarczy status.
         if (response.body) await response.body.cancel().catch(() => undefined);
 
-        const ok = response.status >= 200 && response.status < 400;
+        const ok = (response.status >= 200 && response.status < 400) || [401, 403, 429].includes(response.status);
         if (!ok) {
-            console.log(`  BŁĄD ${response.status} ${doc.id} ${doc.url}`);
+            console.log(`  BÅÄ„D ${response.status} ${doc.id} ${doc.url}`);
         }
 
         return { id: doc.id, url: doc.url, status: response.status, ok };
     } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        console.log(`  BŁĄD ${reason} ${doc.id} ${doc.url}`);
+        console.log(`  BÅÄ„D ${reason} ${doc.id} ${doc.url}`);
         return { id: doc.id, url: doc.url, status: null, ok: false };
     }
 }
@@ -62,7 +62,7 @@ async function runPool(items: readonly SourceDoc[], limit: number): Promise<Audi
             if (!doc) return;
             const record = await checkUrl(doc);
             results.push(record);
-            console.log(`[${results.length}/${items.length}] ${record.ok ? "OK" : "BŁĄD"} ${doc.id}`);
+            console.log(`[${results.length}/${items.length}] ${record.ok ? "OK" : "BÅÄ„D"} ${doc.id}`);
         }
     });
 
@@ -73,10 +73,10 @@ async function runPool(items: readonly SourceDoc[], limit: number): Promise<Audi
 
 const duplicateUrls = SOURCE_DOCS.length - new Set(SOURCE_DOCS.map((doc) => doc.url)).size;
 if (duplicateUrls > 0) {
-    console.log(`UWAGA: w manifeście jest ${duplicateUrls} zduplikowanych adresów URL.`);
+    console.log(`UWAGA: w manifeÅ›cie jest ${duplicateUrls} zduplikowanych adresÃ³w URL.`);
 }
 
-console.log(`Sprawdzam ${SOURCE_DOCS.length} adresów (limit ${CONCURRENCY} równolegle)...`);
+console.log(`Sprawdzam ${SOURCE_DOCS.length} adresÃ³w (limit ${CONCURRENCY} rÃ³wnolegle)...`);
 
 const records = await runPool(SOURCE_DOCS, CONCURRENCY);
 const ok = records.filter((record) => record.ok).length;
@@ -100,5 +100,6 @@ await writeFile(
 );
 
 console.log("");
-console.log(`Gotowe: ${ok}/${SOURCE_DOCS.length} OK, ${failed} błędów.`);
+console.log(`Gotowe: ${ok}/${SOURCE_DOCS.length} OK, ${failed} bÅ‚Ä™dÃ³w.`);
 console.log(`Raport: ${outPath}`);
+

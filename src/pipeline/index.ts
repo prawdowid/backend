@@ -202,7 +202,9 @@ function activeAt(entry: CachedClaim, asOf: string): boolean {
 }
 
 async function extractClaims(text: string): Promise<{ lang: string; date: string | null; claims: Claim[] }> {
-    const user = `<ARTICLE>\n${text}\n</ARTICLE>`;
+    // Strip the delimiter so user content cannot break out of the data block.
+    const safeText = text.replace(/<\/?ARTICLE>/gi, "");
+    const user = `<ARTICLE>\n${safeText}\n</ARTICLE>`;
     let parsed: Summarize | undefined;
 
     for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
@@ -216,7 +218,7 @@ async function extractClaims(text: string): Promise<{ lang: string; date: string
             parsed = JSON.parse(stripFence(raw ?? "")) as Summarize;
         } catch {
             if (attempt === 1) {
-                throw new Error(`Extraction failed: no JSON in response (${raw.slice(0, 160)}...)`);
+                throw new Error("Extraction failed: model did not return valid JSON");
             }
             if (process.env["PIPELINE_DEBUG"] === "1") {
                 console.log("[pipeline] extraction returned no JSON, retrying once");

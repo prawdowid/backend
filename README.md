@@ -12,8 +12,9 @@ cp .env.example .env   # uzupełnij klucze
 bun run dev            # http://localhost:3000
 ```
 
-Wymagane: `OPENROUTER_API_KEY`. Opcjonalne: `GOOGLE_FACT_CHECK_API_KEY` (dowody fact-checkingowe),
-`DISCORD_TOKEN` (drugi kanał). Bez klucza Google system nadal działa, ale raportuje ograniczenie.
+Wymagane: `OPENROUTER_API_KEY`. Opcjonalne: `GOOGLE_FACT_CHECK_API_KEY` (dowody fact-checkingowe).
+Bez klucza Google system nadal działa, ale raportuje ograniczenie. Kanał Discord jest osobnym
+repozytorium i woła ten sam endpoint `POST /verify`.
 
 ## Endpointy
 
@@ -33,7 +34,7 @@ curl -s localhost:3000/verify -H 'content-type: application/json' \
 ## Architektura
 
 ```
-kanał (WWW / Discord / API)
+kanał (WWW / API / zewnętrzny bot Discord)
         │
         ▼
    verifyInput()                 src/pipeline/verify.ts
@@ -50,7 +51,7 @@ kanał (WWW / Discord / API)
    VerifyResponse (werdykt, dowody, ograniczenia, koszt, czas)
 ```
 
-Kanały są cienkie: **Discord i WWW wołają dokładnie tę samą funkcję `verifyInput`**, więc wynik
+Kanały są cienkie: **WWW i zewnętrzny bot wołają dokładnie tę samą funkcję `verifyInput`**, więc wynik
 merytoryczny jest identyczny (wymóg spójności kanałów).
 
 ### Werdykty
@@ -113,4 +114,4 @@ bun run scripts/test-pipeline-cache.ts
 - **prompt injection**: heurystyka + separacja danych; brak pełnego red-teamingu,
 - **prywatność**: logi zawierają treść zapytania — do produkcji potrzebna retencja i maskowanie,
 - **zależności**: OpenRouter, Jina, Google Fact Check; każda awaria kończy się statusem `error`, nie werdyktem,
-- **Discord**: `MessageContent` jest intentem uprzywilejowanym — musi być włączony w portalu.
+- **kanał Discord** jest utrzymywany w osobnym repozytorium i korzysta z `POST /verify`.

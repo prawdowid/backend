@@ -31,7 +31,9 @@ const channelSchema = t.Optional(
 );
 
 const verifyBodySchema = t.Object({
-    text: t.Optional(t.String({ maxLength: MAX_TEXT })),
+    text: t.Optional(
+        t.String({ maxLength: MAX_TEXT, error: "Treść jest zbyt długa (limit 100 000 znaków)." }),
+    ),
     url: t.Optional(t.String({ format: "uri" })),
     channel: channelSchema,
 });

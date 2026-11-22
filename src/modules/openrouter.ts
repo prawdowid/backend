@@ -110,5 +110,6 @@ export function cosineSimilarity(a: readonly number[], b: readonly number[]): nu
         normB += b[i]! * b[i]!;
     }
 
-    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+    const denominator = Math.sqrt(normA) * Math.sqrt(normB);
+    return denominator === 0 ? 0 : dot / denominator;
 }

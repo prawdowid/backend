@@ -37,6 +37,11 @@ async function embedCorpus(): Promise<number[][]> {
     for (let offset = 0; offset < SOURCE_DOCS.length; offset += BATCH_SIZE) {
         const batch = SOURCE_DOCS.slice(offset, offset + BATCH_SIZE);
         const batchVectors = await OpenRouterWrapper.Embed(batch.map(embedText));
+        if (batchVectors.length !== batch.length) {
+            throw new Error(
+                `embedding count mismatch: expected ${batch.length}, got ${batchVectors.length}`,
+            );
+        }
         vectors.push(...batchVectors);
     }
 
@@ -83,6 +88,7 @@ export async function searchSources(query: string, k: number = DEFAULT_K): Promi
         ]);
         queryVector = embedded[0];
         vectors = embedded[1];
+        warned = false;
     } catch (error) {
         warnOnce(error);
         return [];
@@ -93,8 +99,11 @@ export async function searchSources(query: string, k: number = DEFAULT_K): Promi
     for (let i = 0; i < SOURCE_DOCS.length; i++) {
         const doc = SOURCE_DOCS[i];
         const vector = vectors[i];
-        if (!doc || !vector || vector.length === 0) continue;
-        hits.push({ doc, score: cosineSimilarity(queryVector, vector) });
+        if (!doc || !doc.verified || !vector || vector.length === 0) continue;
+        if (vector.length !== queryVector.length) continue;
+        const score = cosineSimilarity(queryVector, vector);
+        if (!Number.isFinite(score)) continue;
+        hits.push({ doc, score });
     }
 
     hits.sort((a, b) => b.score - a.score);
