@@ -308,7 +308,7 @@ async function extractClaims(
     }
 
     // Hard cap: the extraction prompt asks for 8; the model sometimes returns 20+.
-    claims.length = Math.min(claims.length, 8);
+    claims.length = Math.min(claims.length, 12);
 
     return {
         lang: parsed.lang ?? "pl",

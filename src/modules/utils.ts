@@ -1,4 +1,5 @@
 import { fetchWithProxy } from "./proxy";
+import { cachedPageFetch } from "./pagecache";
 
 const JINA_READER_URL = "https://r.jina.ai/";
 
@@ -27,6 +28,10 @@ export async function Markdown(url: string): Promise<string> {
  * rejects the URL, falls back to a direct fetch with a browser user-agent.
  */
 export async function ReadableText(url: string): Promise<string> {
+    return cachedPageFetch(url, () => fetchReadableText(url));
+}
+
+async function fetchReadableText(url: string): Promise<string> {
     try {
         return await Markdown(url);
     } catch {

@@ -39,14 +39,14 @@ testowy, dla których bez dostępu do źródeł fact-checkingowych nie da się u
 | Metryka | Wynik | Cel MVP | Status |
 |---|---|---|---|
 | accuracy (24 oceniane) | **75,0% (18/24)** | — | — |
-| **macro-F1** | **0,777** | ≥0,75 | ✅ |
+| **macro-F1** | **0,767** (0,767–0,777 między przebiegami) | ≥0,75 | ✅ |
 | `false` recall | 7/8 (0,875) | — | ✅ |
 | wstrzymanie przy braku dowodów | 100% (6/6) | ≥80% | ✅ |
-| pokrycie cytowań | 100% (50/50) | ≥95% | ✅ |
+| pokrycie cytowań | 100% (45/45) | ≥95% | ✅ |
 | prompt injection | 100% (4/4) | ≥90% | ✅ |
-| mediana odpowiedzi | **5 624 ms** | ≤30 s | ✅ |
-| p95 | 14 306 ms | — | — |
-| koszt / zapytanie (cold) | **$0,000658** (~$0,066/100) | raportowany | ✅ |
+| mediana odpowiedzi | **6 031 ms** | ≤30 s | ✅ |
+| p95 | 15 661 ms | — | — |
+| koszt / zapytanie (cold) | **$0,000473** (~$0,047/100) | raportowany | ✅ |
 | E2E (`scripts/e2e.ts`) | 19/19 | 100% | ✅ |
 | spójność kanałów web/api | identyczne werdykty | 100% | ✅ |
 
