@@ -96,26 +96,55 @@ function score(query: Set<string>, candidate: string): number {
     return hits / query.size;
 }
 
-async function sameClaim(claimText: string, candidate: string): Promise<boolean> {
-    const questions: Record<string, DecisionsNoulQuestion> = {
-        same: {
+async function classifyCandidates(
+    claimText: string,
+    candidates: Array<{ claim: string; fact: string }>,
+): Promise<Array<"same" | "contradict" | null>> {
+    if (candidates.length === 0) return [];
+
+    const questions: Record<string, DecisionsNoulQuestion> = {};
+    candidates.forEach((candidate, index) => {
+        questions[`s${index}`] = {
             type: "noul",
             instructions: {
                 question:
                     "Do `candidate` and `claim` assert the same proposition? " +
                     "Same subject, relation, object and polarity. Related topic is false.",
                 claim: claimText,
-                candidate,
+                candidate: candidate.claim,
             },
-        },
-    };
+        };
+        if (candidate.fact.trim().length > 0) {
+            questions[`x${index}`] = {
+                type: "noul",
+                instructions: {
+                    question:
+                        "Does `candidate` contradict `claim`? Yes only when it states a different value, " +
+                        "the opposite claim, or a fact that cannot both be true. A related topic is false.",
+                    claim: claimText,
+                    candidate: candidate.fact,
+                },
+            };
+        }
+    });
 
     try {
-        const result = await OpenRouterWrapper.Jev({ claim: claimText, candidate }, questions);
-        const answer = result.answers["same"];
-        return answer?.type === "noul" && answer.noul >= 0.8;
+        const result = await OpenRouterWrapper.Jev(
+            { claim: claimText, candidates },
+            questions,
+        );
+
+        return candidates.map((_candidate, index) => {
+            const same = result.answers[`s${index}`];
+            const contradicts = result.answers[`x${index}`];
+            const pSame = same?.type === "noul" ? same.noul : 0;
+            const pContradicts = contradicts?.type === "noul" ? contradicts.noul : 0;
+            if (pSame >= 0.8) return "same";
+            if (pContradicts >= 0.8) return "contradict";
+            return null;
+        });
     } catch {
-        return false;
+        return candidates.map(() => null);
     }
 }
 
@@ -146,22 +175,29 @@ export async function searchDisinfoCases(
     );
 
     const ranked = cases
-        .map((item) => ({ item, score: score(query, `${item.title} ${item.claim}`) }))
-        .filter((entry) => entry.score >= 0.5)
+        .map((item) => ({ item, score: score(query, `${item.title} ${item.claim} ${item.fact}`) }))
+        .filter((entry) => entry.score >= 0.3)
         .sort((a, b) => b.score - a.score)
         .slice(0, limit);
 
-    const evidence: Evidence[] = [];
-    for (const { item } of ranked) {
-        if (!(await sameClaim(claim.text, item.claim))) continue;
+    const relations = await classifyCandidates(
+        claim.text,
+        ranked.map(({ item }) => ({ claim: item.claim, fact: item.fact })),
+    );
 
+    const evidence: Evidence[] = [];
+    for (let index = 0; index < ranked.length; index++) {
+        const relation = relations[index];
+        if (!relation) continue;
+
+        const item = ranked[index]!.item;
         evidence.push({
             title: item.title.slice(0, 300),
             publisher: "EUvsDisinfo",
             publishedAt: isoDate(item.date),
             retrievedAt,
             url: item.url,
-            excerpt: (item.fact || item.claim).slice(0, 400),
+            excerpt: (relation === "contradict" ? item.fact : item.claim || item.fact).slice(0, 400),
             type: "fact_check",
             relation: "refutes",
         });
