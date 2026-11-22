@@ -177,6 +177,11 @@ type PredicateRule = { pattern: RegExp; spec: PredicateSpec };
 const PREDICATE_RULES: PredicateRule[] = [
     { pattern: /\b(capital|capital city|stolica|stolic)\b/, spec: SPECS.capital },
     {
+        // "number of members" must win over the generic "member" rule.
+        pattern: /\b(number of members|members of parliament|liczba pos\u0142\u00f3w|pos\u0142owie)\b/iu,
+        spec: SPECS.seats,
+    },
+    {
         pattern: /\b(member|membership|member of|czlonk\w*|członk\w*|nalezy|należy|przynalezy|przynależy)\b/,
         spec: SPECS.memberOf,
     },
@@ -870,12 +875,37 @@ function statementActiveAt(statement: Statement, claimDate: ClaimDate | null): b
     return true;
 }
 
-function dateQualifiedMatch(statements: Statement[], claimDate: ClaimDate): "match" | "mismatch" | "unknown" {
+function compareClaimToIso(claimDate: ClaimDate, source: { year: number; month: number; day: number }): number {
+    if (claimDate.year !== source.year) return claimDate.year - source.year;
+    const claimMonth = claimDate.month ?? 1;
+    const sourceMonth = source.month > 0 ? source.month : 1;
+    if (claimMonth !== sourceMonth) return claimMonth - sourceMonth;
+    const claimDay = claimDate.day ?? 1;
+    const sourceDay = source.day > 0 ? source.day : 1;
+    return claimDay - sourceDay;
+}
+
+function dateQualifiedMatch(
+    statements: Statement[],
+    claimDate: ClaimDate,
+    mode: "start" | "interval" = "start",
+): "match" | "mismatch" | "unknown" {
     let sawDate = false;
     for (const statement of statements) {
         if (!statement.from) continue;
         sawDate = true;
-        if (datesMatch(claimDate, statement.from)) return "match";
+
+        if (mode === "start") {
+            if (datesMatch(claimDate, statement.from)) return "match";
+            continue;
+        }
+
+        const from = parseIsoParts(statement.from);
+        if (!from) continue;
+        const to = statement.to ? parseIsoParts(statement.to) : null;
+        const afterStart = compareClaimToIso(claimDate, from) >= 0;
+        const beforeEnd = !to || compareClaimToIso(claimDate, to) <= 0;
+        if (afterStart && beforeEnd) return "match";
     }
     return sawDate ? "mismatch" : "unknown";
 }
@@ -1143,7 +1173,14 @@ export async function lookupWikidata(claim: ClaimInput): Promise<WikidataLookupR
     let relation: "supports" | "refutes" = "supports";
 
     if (claimDate) {
-        const verdict = dateQualifiedMatch(matchedStatements, claimDate);
+        const intervalMode = /\b(prezydent|premier|minister|pose[łl]|senator|office|president|prime minister)\b/iu.test(
+            `${claim.text ?? ""} ${fact.p ?? ""}`,
+        );
+        const verdict = dateQualifiedMatch(
+            matchedStatements,
+            claimDate,
+            intervalMode ? "interval" : "start",
+        );
         if (verdict === "mismatch") relation = "refutes";
         const firstWithDate = matchedStatements.find((statement) => statement.from);
         if (firstWithDate?.from) dateNote = `, od ${formatIsoDate(firstWithDate.from)}`;

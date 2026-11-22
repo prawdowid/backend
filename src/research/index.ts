@@ -612,6 +612,7 @@ function decide(params: {
     refutes: Evidence[];
     hasAnyEvidence: boolean;
     notVerifiable: boolean;
+    forecast?: boolean;
 }): Decision {
     const { factCheckVerdict, supports, refutes, hasAnyEvidence, hasPrimarySupport } = params;
 
@@ -634,6 +635,16 @@ function decide(params: {
             confidence: 0.2,
             reasoning:
                 "Twierdzenie opisuje plan lub hipotezę, a nie ustalony fakt. Brak daty, do której można je odnieść.",
+        };
+    }
+
+    // 2b. A forecast with no evidence is not a checkable fact today.
+    if (params.forecast && supports.length === 0 && refutes.length === 0) {
+        return {
+            verdict: "not_verifiable",
+            confidence: 0.25,
+            reasoning:
+                "To prognoza lub zapowiedź przyszłości, a nie ustalony fakt. Nie da się jej potwierdzić na dzień sprawdzenia.",
         };
     }
 
@@ -1070,6 +1081,11 @@ async function researchOne(
         limitations.push("To zdarzenie zaplanowane na przyszłość — nie można go potwierdzić na dzień sprawdzenia.");
     }
 
+    const isForecast =
+        /\b(zast[ąa]pi|wejdzie|wejd[ąa]|zostanie|b[ęe]dzie|planuj[ea]|prognoz\w*|przewiduj\w*)\b/iu.test(
+            `${claim.text} ${claim.quote ?? ""}`,
+        );
+
     const decision = decide({
         factCheckVerdict,
         independentSupports: supportHosts.size,
@@ -1078,6 +1094,7 @@ async function researchOne(
         refutes,
         hasAnyEvidence: evidence.length > 0,
         notVerifiable: (isPlanned && !hasDateEvidence) || plannedInFuture,
+        forecast: isForecast,
     });
 
     // Rule: a lone non-primary support does not confirm — demote it to context.

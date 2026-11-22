@@ -30,7 +30,7 @@ const USER_AGENT = "PrawdowidBot/1.0 (+https://github.com/hackathon/prawdowid; f
 const SEARCH_LIMIT = 5;
 const MAX_SEARCH_QUERIES = 4;
 const MAX_PAGES = 5;
-const MAX_SENTENCES = 24;
+const MAX_SENTENCES = 30;
 const MIN_SENTENCE = 20;
 const MAX_SENTENCE = 700;
 const REQUEST_TIMEOUT_MS = 6000;
@@ -378,7 +378,15 @@ function pickCandidates(claim: ClaimInput, pages: Array<{ title: string; text: s
         const pageCandidates: Array<Candidate & { score: number; signal: boolean; objectRelation: boolean }> = [];
 
         for (let index = 0; index < sentences.length; index++) {
-            const sentence = sentences[index]!;
+            const raw = sentences[index]!;
+            const isHeading = raw.trimStart().startsWith("=");
+            const next = sentences[index + 1];
+            // A heading is context, not a sentence: merge it with the line below
+            // so "== Państwa poza strefą euro ==" + "Polska: 1 złoty…" is evidence.
+            const sentence =
+                isHeading && next && !next.trimStart().startsWith("=")
+                    ? `${raw} ${next}`
+                    : raw;
             const key = normalizeText(sentence);
             if (seen.has(key)) continue;
 
@@ -438,7 +446,7 @@ function pickCandidates(claim: ClaimInput, pages: Array<{ title: string; text: s
     const signalKeys = new Set(selected.map((entry) => `${entry.url}|${entry.sentence}`));
     for (const list of byPage.values()) {
         const signals = list.filter((entry) => entry.signal && !signalKeys.has(`${entry.url}|${entry.sentence}`));
-        for (const entry of signals.slice(0, 2)) {
+        for (const entry of signals.slice(0, 4)) {
             if (selected.length >= MAX_SENTENCES) break;
             selected.push(entry);
             signalKeys.add(`${entry.url}|${entry.sentence}`);
@@ -503,6 +511,27 @@ function bindingQuestion(claim: ClaimInput): string {
 }
 
 /**
+ * If the sentence gives a year range and the claim year falls just outside it,
+ * say so explicitly. Jev is otherwise conservative about date arithmetic
+ * ("2017–2023" vs a 2024 claim scored 0.57–0.60).
+ */
+function dateRangeHint(sentence: string, date: string): string {
+    const year = Number((date.match(/\d{4}/) ?? [])[0]);
+    if (!Number.isFinite(year)) return "";
+    const range = sentence.match(/((?:19|20)\d{2})\s*[–-]\s*((?:19|20)\d{2})/);
+    if (!range) return "";
+    const from = Number(range[1]);
+    const to = Number(range[2]);
+    if (year > to && year - to <= 2) {
+        return ` Uwaga: zdanie obejmuje lata ${from}–${to}, a twierdzenie dotyczy roku ${year}, który jest poza tym zakresem.`;
+    }
+    if (year < from && from - year <= 2) {
+        return ` Uwaga: zdanie obejmuje lata ${from}–${to}, a twierdzenie dotyczy roku ${year}, który jest przed tym zakresem.`;
+    }
+    return "";
+}
+
+/**
  * Two questions per sentence:
  *  - `same`: the sentence binds the claim's object to the claim's subject
  *    (and, when the claim has a date, in that date).
@@ -538,6 +567,7 @@ async function classifyBindings(claim: ClaimInput, candidates: Candidate[]): Pro
 
     candidates.forEach((candidate, index) => {
         const context = candidate.context ? ` Kontekst (poprzednie zdanie): ${candidate.context}` : "";
+        const rangeHint = dateRangeHint(candidate.sentence, date);
         questions[`s${index}_same`] = {
             type: "noul",
             instructions: {
@@ -545,6 +575,8 @@ async function classifyBindings(claim: ClaimInput, candidates: Candidate[]): Pro
                     `${baseQuestion} Zdanie pochodzi z artykułu „${candidate.article}”. ` +
                     "Odpowiedz tak tylko wtedy, gdy zdanie wiąże ten obiekt z tym podmiotem. " +
                     "Samo wystąpienie słów w zdaniu nie wystarcza — liczy się przypisanie." +
+                    " Jeżeli `sentence` nie wymienia `subject` z nazwy, ale pochodzi z artykułu o `subject`, " +
+                    "przyjmij, że zdanie go dotyczy." +
                     (date ? " Jeśli podano `date`, zdanie musi dotyczyć tego samego czasu." : "") +
                     presentRule +
                     negated +
@@ -567,6 +599,9 @@ async function classifyBindings(claim: ClaimInput, candidates: Candidate[]): Pro
                     "albo (c) wprost zaprzecza tej relacji, " +
                     "albo (d) wymienia `subject` wśród państw/członków POZA `object` lub bez `object`. " +
                     "Zdanie o innym, niepowiązanym temacie to nie." +
+                    " Jeżeli `sentence` nie wymienia `subject` z nazwy, ale pochodzi z artykułu o `subject`, " +
+                    "przyjmij, że zdanie go dotyczy." +
+                    rangeHint +
                     timeRule +
                     eventRule +
                     negated +
@@ -593,13 +628,26 @@ async function classifyBindings(claim: ClaimInput, candidates: Candidate[]): Pro
             const pSame = same?.type === "noul" ? same.noul : 0;
             const pOther = other?.type === "noul" ? other.noul : 0;
             const candidate = candidates[index]!;
+            const rangeHint = dateRangeHint(candidate.sentence, date);
+            const claimYear = (date.match(/\d{4}/) ?? [])[0] ?? "";
+            const differentYear =
+                claimYear.length > 0 &&
+                !yearMatches(candidate.sentence, claimYear) &&
+                /(?:19|20)\d{2}/.test(candidate.sentence);
             if (process.env["PIPELINE_DEBUG"] === "1") {
                 console.log(
                     `[wikipedia-rel] same=${pSame.toFixed(2)} other=${pOther.toFixed(2)} | ${candidate.sentence.slice(0, 140)}`,
                 );
             }
 
-            if (pSame >= JEV_THRESHOLD && pSame > pOther) {
+            // An explicit range that excludes the claim year is a factual
+            // constraint: no matter how "presidential" the sentence sounds, it
+            // cannot confirm the claim for that year.
+            if (rangeHint && pOther > pSame) {
+                return { relation: "refutes", confidence: Math.max(pOther, 0.65) };
+            }
+
+            if (!differentYear && pSame >= JEV_THRESHOLD && pSame > pOther) {
                 return { relation: "supports", confidence: pSame };
             }
             if (pOther >= JEV_THRESHOLD && pOther > pSame) {
@@ -609,7 +657,7 @@ async function classifyBindings(claim: ClaimInput, candidates: Candidate[]): Pro
             // Jev is conservative when a date/range needs inference ("2017–2023"
             // vs a 2024 claim). Accept a clear, one-sided signal above 0.6, but
             // only when the other answer is far behind.
-            if (pSame >= 0.6 && pSame >= pOther * 2 && pSame - pOther >= 0.35) {
+            if (!differentYear && pSame >= 0.6 && pSame >= pOther * 2 && pSame - pOther >= 0.35) {
                 return { relation: "supports", confidence: pSame };
             }
             if (pOther >= 0.6 && pOther >= pSame * 2 && pOther - pSame >= 0.35) {
@@ -714,6 +762,24 @@ export async function relationLookup(claim: ClaimInput): Promise<RelationLookupR
     }
 
     if (!best) {
+        // Last-resort temporal guard: a sentence about the subject explicitly
+        // bounds the relation to years that exclude the claim year. That is
+        // arithmetic, not a semantic guess, so it is safe to report as refute.
+        const subjectTokens = keywordsOf(fact.s ?? "");
+        const phrases = relationPhrases(fact.p ?? "", fact.s ?? "");
+        const rangeIndex = candidates.findIndex((candidate) => {
+            if (!dateRangeHint(candidate.sentence, fact.t ?? "")) return false;
+            const haystack = normalizeText(`${candidate.article} ${candidate.sentence} ${candidate.context}`);
+            return (
+                mentions(haystack, subjectTokens) > 0 ||
+                phrases.some((phrase) => mentions(normalizeText(candidate.sentence), keywordsOf(phrase)) > 0)
+            );
+        });
+        if (rangeIndex >= 0) {
+            const chosen = candidates[rangeIndex]!;
+            return { relation: "refutes", sentence: chosen.sentence, url: chosen.url };
+        }
+
         const first = candidates[0]!;
         return { relation: null, sentence: first.sentence, url: first.url };
     }
