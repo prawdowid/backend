@@ -20,12 +20,13 @@
  */
 
 import type { ClaimInput, Evidence } from "../pipeline/types";
+import { fetchWithProxy } from "../modules/proxy";
 
 const API_ENDPOINT = "https://www.wikidata.org/w/api.php";
 const USER_AGENT = "PrawdowidBot/1.0 (fact-checking prototype; contact: local)";
 const REQUEST_TIMEOUT_MS = 8000;
 /** Wikidata asks for serial requests; one claim needs 2-4 of them. */
-const MIN_REQUEST_GAP_MS = 250;
+const MIN_REQUEST_GAP_MS = 300;
 const SEARCH_LIMIT = 5;
 const MAX_CANDIDATES = 5;
 const MAX_BATCH_IDS = 20;
@@ -319,14 +320,12 @@ async function api<T>(params: Record<string, string>): Promise<T> {
         await waitTurn();
         let response: Response;
         try {
-            const proxy = process.env["RESEARCH_PROXY_URL"];
-            response = await fetch(url, {
+            response = await fetchWithProxy(url, {
                 headers: {
                     "User-Agent": USER_AGENT,
                     "Api-User-Agent": USER_AGENT,
                     Accept: "application/json",
                 },
-                ...(proxy ? { proxy } : {}),
                 signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
             });
         } catch (error) {

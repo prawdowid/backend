@@ -19,6 +19,7 @@ import { searchDisinfoCases } from "./euvsdisinfo";
 import { searchWeb } from "./search";
 import { wikidataEvidence } from "./wikidata";
 import { searchCorpusDocuments } from "./corpus-docs";
+import { fetchWithProxy } from "../modules/proxy";
 import type {
     ClaimInput,
     ClaimVerdict,
@@ -40,7 +41,7 @@ const CONTENT_FETCH_LIMIT = 3;
 /** Markdown() has no AbortSignal, so we race it against this budget. */
 const CONTENT_FETCH_TIMEOUT_MS = 4000;
 /** Total wall-clock budget for page fetches across one request. */
-const RESEARCH_FETCH_BUDGET_MS = 18_000;
+const RESEARCH_FETCH_BUDGET_MS = 26_000;
 /** A page can be a book; the matcher only needs the beginning. */
 const CONTENT_MAX_CHARS = 20_000;
 const GOOGLE_PAGE_SIZE = 5;
@@ -367,12 +368,10 @@ function wikiGate(): Promise<void> {
 }
 
 async function wikipediaViaJina(url: string): Promise<string> {
-    const proxy = process.env["RESEARCH_PROXY_URL"];
-    const response = await fetch(`https://r.jina.ai/${url}`, {
+    const response = await fetchWithProxy(`https://r.jina.ai/${url}`, {
         headers: {
             accept: "text/plain",
         },
-        ...(proxy ? { proxy } : {}),
         signal: AbortSignal.timeout(20_000),
     });
 
@@ -396,13 +395,11 @@ async function wikipediaJson<T>(url: string): Promise<T> {
         return data;
     }
 
-    const proxy = process.env["RESEARCH_PROXY_URL"];
-    const response = await fetch(url, {
+    const response = await fetchWithProxy(url, {
         headers: {
             "user-agent": "PrawdowidBot/1.0 (fact-checking prototype; contact: local)",
             accept: "application/json",
         },
-        ...(proxy ? { proxy } : {}),
         signal: AbortSignal.timeout(8000),
     });
 
@@ -1198,7 +1195,7 @@ export async function researchClaims(
                                     ),
                                     googleUsed: false,
                                 }),
-                            10_000,
+                            20_000,
                         );
                     }),
                 ]);

@@ -1,16 +1,16 @@
+import { fetchWithProxy } from "./proxy";
+
 const JINA_READER_URL = "https://r.jina.ai/";
 
 /** Renders a web page as Markdown via Jina Reader. */
 export async function Markdown(url: string): Promise<string> {
     const baseUrl = process.env["JINA_READER_URL"] ?? JINA_READER_URL;
 
-    const proxy = process.env["RESEARCH_PROXY_URL"];
-    const response = await fetch(baseUrl + url, {
+    const response = await fetchWithProxy(baseUrl + url, {
         headers: {
             accept: "text/plain",
             "x-return-format": "markdown",
         },
-        ...(proxy ? { proxy } : {}),
     });
 
     if (!response.ok) {
@@ -30,15 +30,13 @@ export async function ReadableText(url: string): Promise<string> {
     try {
         return await Markdown(url);
     } catch {
-        const proxy = process.env["RESEARCH_PROXY_URL"];
-        const response = await fetch(url, {
+        const response = await fetchWithProxy(url, {
             headers: {
                 "user-agent":
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                 accept: "text/html,application/xhtml+xml;q=0.8,*/*;q=0.5",
             },
             redirect: "follow",
-            ...(proxy ? { proxy } : {}),
             signal: AbortSignal.timeout(8000),
         });
 
