@@ -41,11 +41,16 @@ export type CachedClaim = StatementCandidate & {
     validUntil?: string | null;
 };
 
-/** Swap the in-memory implementation for Redis later; the pipeline only needs this. */
+/** Swap the in-memory implementation for Redis/MySQL later; the pipeline only needs this. */
 export interface CacheStore {
     all(): Promise<CachedClaim[]>;
     getByKey(key: string): Promise<CachedClaim | undefined>;
     put(entry: CachedClaim): Promise<void>;
+    /**
+     * Optional vector search. Implementations with an index should override it;
+     * the pipeline falls back to `all()` + in-process cosine when absent.
+     */
+    search?(vector: number[], limit: number, asOf: string): Promise<CachedClaim[]>;
 }
 
 export type CacheHit = {
@@ -298,7 +303,8 @@ export async function runPipeline(
     // Stage 3: embed only incoming claims; cached vectors live in the store.
     stage = Date.now();
     const vectors = await OpenRouterWrapper.Embed(claims.map((c) => c.text));
-    const candidates = await cache.all();
+    // Stores with a vector index must not be loaded wholesale.
+    const candidates = cache.search ? [] : await cache.all();
     mark(`embed + cache.all (${candidates.length} cached)`, stage);
 
     // Stage 4: exact key hit first, otherwise shortlist + one batched Jev request.
@@ -316,10 +322,10 @@ export async function runPipeline(
             continue;
         }
 
-        const list = shortlist(
-            candidates.filter((candidate) => activeAt(candidate, claim.fact.t ?? asOf)),
-            vectors[i]!,
-        );
+        const claimAsOf = claim.fact.t ?? asOf;
+        const list = cache.search
+            ? await cache.search(vectors[i]!, SHORTLIST_SIZE, claimAsOf)
+            : shortlist(candidates.filter((candidate) => activeAt(candidate, claimAsOf)), vectors[i]!);
         if (list.length === 0) {
             misses.push(claim);
             continue;

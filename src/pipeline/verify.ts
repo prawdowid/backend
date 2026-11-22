@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { runPipeline, type CacheStore } from ".";
 import { FileCacheStore } from "./filestore";
+import { MySQLCacheStore } from "./mysqlstore";
 import { researchClaims } from "../research";
 import { Markdown } from "../modules/utils";
 import { OpenRouterWrapper } from "../modules/openrouter";
@@ -15,8 +16,11 @@ import {
 
 const MAX_TEXT = 100_000;
 
-/** Persisted between runs; swap for Redis via the same CacheStore interface. */
-export const defaultCache: CacheStore = new FileCacheStore();
+/** Persisted between runs; MySQL when MYSQL_URL is set, JSON file otherwise. */
+export const defaultCache: CacheStore = (() => {
+    const mysqlUrl = process.env["MYSQL_URL"] ?? process.env["DATABASE_URL"];
+    return mysqlUrl ? new MySQLCacheStore(mysqlUrl) : new FileCacheStore();
+})();
 
 function cacheVerdict(verdict: string): Verdict {
     switch (verdict) {

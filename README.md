@@ -100,6 +100,23 @@ Przy 3. zgłoszeniu tej samej sprawy system raz wysyła alert:
 
 `GET /cases` pokazuje `open`, `escalated` i `recommended` osobno; `POST /cases/:id/ack` zamyka sprawę.
 
+### Skala i baza
+
+Domyślnie cache to pliki JSON w `data/` — wystarcza do kilkuset claimów. Po włączeniu
+`MYSQL_URL` backend używa `MySQLCacheStore`:
+
+```bash
+mysql -u user -p prawdowid < sql/schema.sql
+# .env: MYSQL_URL=mysql://user:pass@host:3306/prawdowid
+```
+
+- embeddingi leżą jako `BLOB` (`Float32Array`, 4 KB na 1024 wymiary), nie JSON,
+- `search()` przegląda ograniczone okno czasowe (domyślnie 2000 najnowszych wierszy)
+  i rerankuje w procesie — bez pełnego skanu tabeli,
+- przy >100k claimów trzeba podmienić okno na ANN (MySQL 9 `VECTOR`, Redis Stack),
+  kontrakt `CacheStore` się nie zmienia,
+- dokumenty źródłowe i dowody mają osobne tabele (`documents`, `evidence`) pod audyt i eksport.
+
 ## Bezpieczeństwo
 
 - treść użytkownika jest **danymi** w `<ARTICLE>`; MASTERPROMPT zabrania wykonywania instrukcji z treści,
