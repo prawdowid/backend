@@ -15,6 +15,7 @@ import type { DecisionsNoulQuestion } from "@openrouter/sdk/models";
 import { Markdown } from "../modules/utils";
 import { OpenRouterWrapper } from "../modules/openrouter";
 import { searchSources } from "../sources";
+import { searchDisinfoCases } from "./euvsdisinfo";
 import type {
     ClaimInput,
     ClaimVerdict,
@@ -338,15 +339,25 @@ type WikipediaPages = {
 };
 
 async function wikipediaJson<T>(url: string): Promise<T> {
-    const response = await fetch(url, {
-        headers: {
-            "user-agent": "PrawdowidBot/1.0 (fact-checking prototype)",
-            accept: "application/json",
-        },
-        signal: AbortSignal.timeout(6000),
-    });
-    if (!response.ok) throw new Error(`Wikipedia ${response.status}`);
-    return (await response.json()) as T;
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await fetch(url, {
+            headers: {
+                "user-agent": "PrawdowidBot/1.0 (fact-checking prototype; contact: local)",
+                accept: "application/json",
+            },
+            signal: AbortSignal.timeout(6000),
+        });
+
+        if (response.status === 429 && attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+            continue;
+        }
+
+        if (!response.ok) throw new Error(`Wikipedia ${response.status}`);
+        return (await response.json()) as T;
+    }
+
+    throw new Error("Wikipedia 429");
 }
 
 async function classifySentences(
@@ -789,6 +800,25 @@ async function researchOne(
             }
         } catch {
             limitations.push("Dostęp do Google Fact Check był ograniczony.");
+        }
+    }
+
+    // EUvsDisinfo case base: a matching disinformation case refutes the claim.
+    if (
+        !ctx.offline &&
+        !evidence.some((item) => item.relation === "supports" || item.relation === "refutes")
+    ) {
+        try {
+            const disinfo = await searchDisinfoCases(claim, retrievedAt);
+            for (const item of disinfo) {
+                const key = item.url.toLowerCase();
+                if (seenUrls.has(key)) continue;
+                seenUrls.add(key);
+                evidence.push(item);
+            }
+            if (disinfo.length > 0) limitations.push("Wykorzystano bazę EUvsDisinfo.");
+        } catch {
+            limitations.push("Baza EUvsDisinfo była niedostępna.");
         }
     }
 

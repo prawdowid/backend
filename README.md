@@ -85,6 +85,20 @@ bun run scripts/ingest-sources.ts   # zapisuje data/sources/audit.json
 `searchSources()` embeduje manifest partiami po 32 i zwraca top-k po cosine. Wektory żyją w pamięci
 procesu; przy awarii embeddingów zwraca `[]` zamiast wywalać weryfikację.
 
+#### Baza przypadków EUvsDisinfo
+
+Serwer MCP EUvsDisinfo udostępnia tylko paginowane listy (`cases`, `articles`), bez wyszukiwania, więc
+pobieramy snapshot przypadków i przeszukujemy go lokalnie. Runtime czyta `data/euvsdisinfo/cases.ndjson`
+i **nie potrzebuje tokenu** — token służy wyłącznie do odświeżenia snapshotu. Dopasowanie jest tokenowe,
+a o tym, czy to naprawdę ta sama teza, decyduje bramka Jev (`noul ≥ 0,8`); bez niej przypadek nie staje
+się dowodem.
+
+```bash
+EUVD_TOKEN=... bun run scripts/ingest-euvsdisinfo.ts   # EUVD_LIMIT=5000 pobiera więcej
+```
+
+Licencje, format snapshotu i ograniczenia: `docs/SOURCES.md`.
+
 ### Pętla informacji
 
 Nierozstrzygnięte twierdzenia (`insufficient_evidence`, `not_verifiable`) trafiają do

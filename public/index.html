@@ -97,7 +97,7 @@
 
   .hint, .meta, .evidence-meta { color: var(--muted); font-size: 0.9rem; }
 
-  textarea, input[type="url"] {
+  textarea, input[type="url"], input[type="file"] {
     width: 100%;
     font: inherit;
     color: var(--ink);
@@ -108,6 +108,59 @@
   }
 
   textarea { min-height: 9rem; resize: vertical; }
+
+  input[type="file"] { border-style: dashed; padding: 0.55rem 0.7rem; }
+  input[type="file"]::file-selector-button { font: inherit; margin-right: 0.7rem; }
+
+  .image-preview {
+    display: grid;
+    gap: 0.4rem;
+    margin-top: 0.4rem;
+    padding: 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--bg);
+  }
+
+  .image-preview img {
+    max-width: 100%;
+    max-height: 280px;
+    border-radius: 8px;
+    object-fit: contain;
+    justify-self: start;
+  }
+
+  .image-error { color: var(--bad); font-weight: 650; }
+
+  .experimental-note {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem 0.7rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--info);
+    border-radius: 10px;
+    background: var(--info-soft);
+    color: var(--ink);
+    font-size: 0.92rem;
+  }
+
+  .experimental-note p { margin: 0; flex: 1 1 18rem; }
+
+  .experimental-badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid var(--info);
+    background: var(--surface);
+    color: var(--info);
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
 
   textarea:focus-visible, input:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible {
     outline: 3px solid var(--focus);
@@ -306,7 +359,7 @@
             placeholder="Wklej artykuł, post albo cytat do sprawdzenia…"
             aria-describedby="text-hint"
           ></textarea>
-          <p id="text-hint" class="hint">Do 100 000 znaków. Możesz zostawić puste, jeśli podajesz link.</p>
+          <p id="text-hint" class="hint">Do 100 000 znaków. Możesz zostawić puste, jeśli podajesz link albo zdjęcie.</p>
         </div>
 
         <div class="field">
@@ -323,6 +376,32 @@
           <p id="url-hint" class="hint">Pełny adres http:// lub https://. Jeśli podasz też tekst, sprawdzę tekst.</p>
         </div>
 
+        <div class="field">
+          <label for="image">albo zdjęcie lub zrzut ekranu z tekstem</label>
+          <div id="image-note" class="experimental-note" role="note">
+            <span class="experimental-badge">EKSPERYMENTALNE</span>
+            <p>
+              Odczytujemy tylko tekst ze zdjęcia (OCR). Nie weryfikujemy autentyczności zdjęcia,
+              metadanych ani wcześniejszych wystąpień. Wynik może być niepełny.
+            </p>
+          </div>
+          <input
+            id="image"
+            name="image"
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            aria-describedby="image-note image-hint image-status"
+          />
+          <p id="image-hint" class="hint">
+            Odczytujemy tekst ze zdjęcia (OCR). Nie weryfikujemy autentyczności zdjęcia.
+            Format PNG, JPEG lub WebP, maksymalnie 8 MB. Pole tekstowe i link są opcjonalne.
+          </p>
+          <p id="image-status" class="hint" role="status" aria-live="polite"></p>
+          <div id="image-preview" class="image-preview" hidden>
+            <img id="image-preview-img" alt="Podgląd wybranego zdjęcia" />
+          </div>
+        </div>
+
         <div class="actions">
           <button id="submit" type="submit">Sprawdź</button>
           <button id="clear" type="button" class="secondary">Wyczyść</button>
@@ -334,7 +413,7 @@
     <noscript>
       <div class="banner is-warn" role="status">
         <h2>Ten interfejs potrzebuje JavaScriptu</h2>
-        <p>Włącz JavaScript albo wyślij zapytanie POST na adres <code>/verify</code> z polami <code>text</code> lub <code>url</code>.</p>
+        <p>Włącz JavaScript albo wyślij zapytanie POST na adres <code>/verify</code> z polami <code>text</code>, <code>url</code> lub <code>image</code> (base64).</p>
       </div>
     </noscript>
 
@@ -380,11 +459,83 @@
   var form = document.getElementById("verify-form");
   var textInput = document.getElementById("text");
   var urlInput = document.getElementById("url");
+  var imageInput = document.getElementById("image");
+  var imageStatus = document.getElementById("image-status");
+  var imagePreview = document.getElementById("image-preview");
+  var imagePreviewImg = document.getElementById("image-preview-img");
   var submitButton = document.getElementById("submit");
   var clearButton = document.getElementById("clear");
   var formStatus = document.getElementById("form-status");
   var loadingBox = document.getElementById("loading");
   var results = document.getElementById("results");
+
+  var MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+  var IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
+  /** Data URL of the picked file, or null when nothing valid is selected. */
+  var selectedImage = null;
+
+  function formatBytes(bytes) {
+    if (!isFinite(bytes) || bytes <= 0) return "0 B";
+    if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + " kB";
+    return (bytes / (1024 * 1024)).toFixed(1).replace(".", ",") + " MB";
+  }
+
+  function resetImage() {
+    selectedImage = null;
+    imageInput.value = "";
+    imagePreview.hidden = true;
+    imagePreviewImg.removeAttribute("src");
+    imageStatus.textContent = "";
+    imageStatus.className = "hint";
+  }
+
+  function imageError(message) {
+    selectedImage = null;
+    imagePreview.hidden = true;
+    imagePreviewImg.removeAttribute("src");
+    imageStatus.textContent = message;
+    imageStatus.className = "hint image-error";
+  }
+
+  function handleImageChange() {
+    selectedImage = null;
+    imagePreview.hidden = true;
+    imagePreviewImg.removeAttribute("src");
+    imageStatus.textContent = "";
+    imageStatus.className = "hint";
+
+    var file = imageInput.files && imageInput.files[0];
+    if (!file) return;
+
+    if (IMAGE_TYPES.indexOf(file.type) === -1) {
+      imageError("Wybierz plik PNG, JPEG albo WebP.");
+      imageInput.value = "";
+      return;
+    }
+
+    if (file.size > MAX_IMAGE_BYTES) {
+      imageError("Plik jest zbyt duży: " + formatBytes(file.size) + ". Limit to 8 MB.");
+      imageInput.value = "";
+      return;
+    }
+
+    var reader = new FileReader();
+    reader.onload = function () {
+      if (typeof reader.result !== "string") {
+        imageError("Nie udało się wczytać pliku.");
+        return;
+      }
+      selectedImage = reader.result;
+      imagePreviewImg.src = selectedImage;
+      imagePreview.hidden = false;
+      imageStatus.textContent =
+        "Wybrano plik " + file.name + " (" + formatBytes(file.size) + "). Odczytamy z niego tekst (OCR).";
+    };
+    reader.onerror = function () {
+      imageError("Nie udało się wczytać pliku.");
+    };
+    reader.readAsDataURL(file);
+  }
 
   function el(tag, options) {
     var opts = options || {};
@@ -634,6 +785,7 @@
     submitButton.disabled = isLoading;
     textInput.readOnly = isLoading;
     urlInput.readOnly = isLoading;
+    imageInput.disabled = isLoading;
     submitButton.textContent = isLoading ? "Sprawdzam…" : "Sprawdź";
     if (isLoading) {
       clear(results);
@@ -661,9 +813,10 @@
 
     var text = textInput.value.trim();
     var url = urlInput.value.trim();
+    var hasImage = typeof selectedImage === "string" && selectedImage.length > 0;
 
-    if (!text && !url) {
-      formStatus.textContent = "Podaj tekst albo poprawny link.";
+    if (!text && !url && !hasImage) {
+      formStatus.textContent = "Podaj tekst, link albo wybierz zdjęcie.";
       textInput.focus();
       return;
     }
@@ -671,6 +824,7 @@
     var payload = {};
     if (text) payload.text = text;
     if (url) payload.url = url;
+    if (hasImage) payload.image = selectedImage;
     payload.channel = "web";
 
     setLoading(true);
@@ -716,8 +870,11 @@
 
   form.addEventListener("submit", submitForm);
 
+  imageInput.addEventListener("change", handleImageChange);
+
   clearButton.addEventListener("click", function () {
     form.reset();
+    resetImage();
     clear(results);
     formStatus.textContent = "";
     textInput.focus();

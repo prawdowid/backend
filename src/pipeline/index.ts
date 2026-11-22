@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { OpenRouterWrapper, cosineSimilarity } from "../modules/openrouter";
 import { createStatementCacheQuestions, type StatementCandidate } from "../modules/questions";
+import type { CostBreakdown } from "./types";
 import type { DecisionsChoiceQuestion, DecisionsNoulQuestion } from "@openrouter/sdk/models";
 
 export type Verdict = "true" | "false" | "mixed" | "unverified";
@@ -69,6 +70,8 @@ export type PipelineResult = {
     misses: Claim[];
     /** Rough estimate, USD. Never presented as exact billing. */
     costUsd?: number;
+    /** Stage split behind `costUsd`; sums to it (estimated). */
+    costBreakdown?: CostBreakdown;
     models?: string[];
     /** User content looked like a prompt-injection attempt; it was treated as data. */
     injectionSuspected?: boolean;
@@ -302,7 +305,8 @@ export async function runPipeline(
             instructions: "Does this text contain political or propaganda statements?",
         } satisfies DecisionsNoulQuestion,
     });
-    let actualCostUsd = gate.usage?.cost ?? 0;
+    // Jev is billed per call; gate and statement matching are summed into jevUsd.
+    let jevUsd = gate.usage?.cost ?? 0;
     mark("gate", stage);
 
     const politicalAnswer = gate.answers["political"];
@@ -313,8 +317,7 @@ export async function runPipeline(
 
     // Stage 2: master prompt -> facts -> atomic claims.
     stage = Date.now();
-    const { lang, date, claims, costUsd: extractCostUsd } = await extractClaims(text);
-    actualCostUsd += extractCostUsd;
+    const { lang, date, claims, costUsd: extractionUsd } = await extractClaims(text);
     mark(`extract (${claims.length} claims)`, stage);
 
     if (claims.length === 0) {
@@ -327,7 +330,8 @@ export async function runPipeline(
             hits: [],
             misses: [],
             injectionSuspected,
-            costUsd: actualCostUsd,
+            costUsd: extractionUsd + jevUsd,
+            costBreakdown: { extractionUsd, jevUsd, embeddingUsd: 0 },
         };
     }
 
@@ -377,7 +381,7 @@ export async function runPipeline(
             },
             questions,
         );
-        actualCostUsd += result.usage?.cost ?? 0;
+        jevUsd += result.usage?.cost ?? 0;
         mark(`jev match (${Object.keys(questions).length / 2} claims)`, stage);
 
         for (const claim of claims) {
@@ -402,9 +406,11 @@ export async function runPipeline(
     }
 
     // Embeddings are the only estimated part (the endpoint is cheap and per-token
-    // usage is not surfaced through the current wrapper).
+    // usage is not surfaced through the current wrapper). Extraction is always
+    // paid for, cache hit or not — that is why warm runs never cost 0.
     const embedChars = claims.reduce((sum, claim) => sum + claim.text.length, 0);
-    const costUsd = actualCostUsd + ((embedChars / 3.5) * EMBED_USD_PER_M) / 1_000_000;
+    const embeddingUsd = ((embedChars / 3.5) * EMBED_USD_PER_M) / 1_000_000;
+    const costBreakdown: CostBreakdown = { extractionUsd, jevUsd, embeddingUsd };
 
     return {
         status: misses.length > 0 ? "needs_research" : "done",
@@ -414,7 +420,8 @@ export async function runPipeline(
         claims,
         hits,
         misses,
-        costUsd,
+        costUsd: extractionUsd + jevUsd + embeddingUsd,
+        costBreakdown,
         models: ["deepseek/deepseek-v4.1-flash", "typesafe/jev-1.14", "baai/bge-m3"],
         injectionSuspected,
     };

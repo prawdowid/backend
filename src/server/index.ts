@@ -12,16 +12,21 @@ import { getMetrics, logVerification } from "./logger";
 import { acknowledgeCase, listCases, recordUnresolved } from "../moderation";
 
 const MAX_TEXT = 100_000;
+/** Base64 or data URL. ~12M chars covers an 8 MB image plus prefix and padding. */
+const MAX_IMAGE_CHARS = 12_000_000;
 const VERSION = "0.1.0";
 
 const PUBLIC_INDEX = fileURLToPath(new URL("../../public/index.html", import.meta.url));
 
 const VALIDATION_LIMITATIONS = [
-    "Przyjmuję tekst do 100 000 znaków albo poprawny adres URL (http/https).",
+    "Przyjmuję tekst do 100 000 znaków, poprawny adres URL (http/https) albo zdjęcie (PNG/JPEG/WebP, do 8 MB).",
     "Nic nie zostało sprawdzone. To nie jest werdykt.",
 ];
 
-const BAD_INPUT = errorResponse("Podaj tekst albo poprawny link.", VALIDATION_LIMITATIONS);
+const BAD_INPUT = errorResponse(
+    "Podaj tekst, poprawny link albo zdjęcie z tekstem.",
+    VALIDATION_LIMITATIONS,
+);
 
 const channelSchema = t.Optional(
     t.Union([t.Literal("web"), t.Literal("discord"), t.Literal("api"), t.Literal("sms")]),
@@ -32,12 +37,19 @@ const verifyBodySchema = t.Object({
         t.String({ maxLength: MAX_TEXT, error: "Treść jest zbyt długa (limit 100 000 znaków)." }),
     ),
     url: t.Optional(t.String({ format: "uri" })),
+    image: t.Optional(
+        t.String({
+            maxLength: MAX_IMAGE_CHARS,
+            error: "Obraz jest zbyt duży (limit 8 MB po zdekodowaniu).",
+        }),
+    ),
     channel: channelSchema,
 });
 
 type VerifyBody = {
     text?: string;
     url?: string;
+    image?: string;
     channel?: VerifyRequest["channel"];
 };
 
@@ -127,9 +139,10 @@ export const verificationApi = new Elysia({ name: "verification-api" })
 
             const text = typeof input.text === "string" ? input.text.trim() : "";
             const url = typeof input.url === "string" ? input.url.trim() : "";
+            const image = typeof input.image === "string" ? input.image.trim() : "";
             const channel = input.channel ?? "api";
 
-            if (!text && !url) {
+            if (!text && !url && !image) {
                 set.status = 400;
                 return BAD_INPUT;
             }
@@ -138,7 +151,7 @@ export const verificationApi = new Elysia({ name: "verification-api" })
                 set.status = 400;
                 return {
                     status: "error" as const,
-                    summary: "Podaj tekst albo poprawny link.",
+                    summary: "Podaj tekst, poprawny link albo zdjęcie z tekstem.",
                     limitations: [
                         "Link musi być pełnym adresem http:// lub https://.",
                         "Nic nie zostało sprawdzone. To nie jest werdykt.",
@@ -151,6 +164,7 @@ export const verificationApi = new Elysia({ name: "verification-api" })
                     {
                         ...(text ? { text } : {}),
                         ...(url ? { url } : {}),
+                        ...(image ? { image } : {}),
                         channel,
                     },
                     { cache: defaultCache },
@@ -163,7 +177,8 @@ export const verificationApi = new Elysia({ name: "verification-api" })
                     timingMs: response.timingMs,
                     claims: response.claims,
                     channel,
-                    inputKind: response.input.kind,
+                    // Logger declares only text|url; "image" is kept at runtime on purpose.
+                    inputKind: response.input.kind as "text" | "url",
                     models: response.models,
                     costUsd: response.costUsd,
                 }).catch((error: unknown) => {
@@ -189,7 +204,7 @@ export const verificationApi = new Elysia({ name: "verification-api" })
                 const failed = errorResponse("Nie udało się wykonać sprawdzenia. To nie jest werdykt.", [
                     "Błąd techniczny po stronie serwera.",
                 ], {
-                    kind: url && !text ? "url" : "text",
+                    kind: image ? "image" : url && !text ? "url" : "text",
                     preview: (url || text).slice(0, 200),
                 });
 
@@ -200,7 +215,7 @@ export const verificationApi = new Elysia({ name: "verification-api" })
                     timingMs: 0,
                     claims: [],
                     channel,
-                    inputKind: failed.input.kind,
+                    inputKind: failed.input.kind as "text" | "url",
                     models: [],
                     costUsd: 0,
                 }).catch(() => undefined);

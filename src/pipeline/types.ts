@@ -101,21 +101,41 @@ export type ResearchResult = {
     costUsd: number;
 };
 
+/** Per-stage cost split, USD. An estimate, never presented as exact billing. */
+export type CostBreakdown = {
+    /** DeepSeek extraction (real tokens from ChatDetailed × list prices). */
+    extractionUsd: number;
+    /** Jev gate + statement matching (real `usage.cost`). */
+    jevUsd: number;
+    /** Claim embeddings (chars / 3.5 token estimate × list price). */
+    embeddingUsd: number;
+};
+
+/** verifyInput adds the research stage on top of the pipeline stages. */
+export type VerifyCostBreakdown = CostBreakdown & {
+    /** Research (Google Fact Check / Wikipedia / EUvsDisinfo), as reported by research. */
+    researchUsd: number;
+};
+
 export type VerifyRequest = {
     text?: string;
     url?: string;
+    /** Image as raw base64 or a `data:<mime>;base64,` URI. Text is read via OCR. */
+    image?: string;
     channel?: "web" | "discord" | "api" | "sms";
 };
 
 export type VerifyResponse = {
     status: OutcomeStatus;
     language: "pl";
-    input: { kind: "text" | "url"; preview: string };
+    input: { kind: "text" | "url" | "image"; preview: string };
     summary: string;
     claims: ClaimVerdict[];
     limitations: string[];
     timingMs: number;
     costUsd: number;
+    /** Stage split behind `costUsd`; sums to it (estimated). */
+    costBreakdown?: VerifyCostBreakdown;
     models: string[];
     sourcesUsed: string[];
     sessionId: string;

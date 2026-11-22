@@ -3,7 +3,7 @@ import { runPipeline, type CacheStore } from ".";
 import { FileCacheStore } from "./filestore";
 import { MySQLCacheStore } from "./mysqlstore";
 import { researchClaims } from "../research";
-import { ReadableText } from "../modules/utils";
+import { DeepSeekOCRExtract, ReadableText } from "../modules/utils";
 import { OpenRouterWrapper } from "../modules/openrouter";
 import {
     DISCLAIMER_PL,
@@ -15,6 +15,24 @@ import {
 } from "./types";
 
 const MAX_TEXT = 100_000;
+
+/** Max decoded image size. The API schema caps the base64 string at 12M chars (~9 MB). */
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+
+const IMAGE_LIMITATION =
+    "Treść odczytana OCR. Obraz nie jest niezależnie weryfikowany; data i metadane mogą być nieaktualne.";
+
+/** Strips a data URI prefix; tolerant of raw base64 input. */
+function decodeImage(image: string): Buffer {
+    return Buffer.from(image.replace(/^data:[\w.+-]+\/[\w.+-]+;base64,/i, ""), "base64");
+}
+
+/** Short technical reason safe to show to the user: no URLs, no secrets, bounded length. */
+function technicalReason(error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error);
+    const cleaned = message.replace(/https?:\/\/\S+/gi, "[adres]").trim();
+    return (cleaned || "nieznany błąd").slice(0, 200);
+}
 
 /** Persisted between runs; MySQL when MYSQL_URL is set, JSON file otherwise. */
 export const defaultCache: CacheStore = (() => {
@@ -95,13 +113,15 @@ export async function verifyInput(
 
     const text = typeof request.text === "string" ? request.text.trim() : "";
     const url = typeof request.url === "string" ? request.url.trim() : "";
+    const image = typeof request.image === "string" ? request.image.trim() : "";
+    const hasImage = image.length > 0;
 
-    if (!text && !url) {
+    if (!text && !url && !hasImage) {
         return {
             status: "needs_clarification",
             language: "pl",
             input: { kind: "text", preview: "" },
-            summary: "Podaj treść doniesienia albo link do niego.",
+            summary: "Podaj treść doniesienia, link do niego albo zdjęcie z tekstem.",
             claims: [],
             limitations: ["Brak treści do sprawdzenia."],
             timingMs: Date.now() - started,
@@ -130,12 +150,103 @@ export async function verifyInput(
         };
     }
 
+    let imageText = "";
+    let imagePreview = "";
+
+    if (hasImage) {
+        const bytes = decodeImage(image);
+
+        if (bytes.length === 0) {
+            return {
+                status: "error",
+                language: "pl",
+                input: { kind: "image", preview: "" },
+                summary: "Nie udało się odczytać obrazu. To nie jest werdykt.",
+                claims: [],
+                limitations: [IMAGE_LIMITATION, "Powód techniczny: pusty lub niepoprawny obraz."],
+                timingMs: Date.now() - started,
+                costUsd: 0,
+                models: [],
+                sourcesUsed: [],
+                sessionId: randomUUID(),
+                disclaimer: DISCLAIMER_PL,
+            };
+        }
+
+        if (bytes.length > MAX_IMAGE_BYTES) {
+            return {
+                status: "error",
+                language: "pl",
+                input: { kind: "image", preview: "" },
+                summary: "Obraz jest zbyt duży. To nie jest werdykt.",
+                claims: [],
+                limitations: [
+                    `Limit obrazu to ${Math.floor(MAX_IMAGE_BYTES / (1024 * 1024))} MB po zdekodowaniu.`,
+                ],
+                timingMs: Date.now() - started,
+                costUsd: 0,
+                models: [],
+                sourcesUsed: [],
+                sessionId: randomUUID(),
+                disclaimer: DISCLAIMER_PL,
+            };
+        }
+
+        try {
+            const ocr = await DeepSeekOCRExtract(image);
+            imageText = (Array.isArray(ocr.text) ? ocr.text : []).join("\n").trim();
+
+            if (!imageText) {
+                return {
+                    status: "error",
+                    language: "pl",
+                    input: { kind: "image", preview: "" },
+                    summary: "Nie udało się odczytać obrazu. To nie jest werdykt.",
+                    claims: [],
+                    limitations: [
+                        IMAGE_LIMITATION,
+                        `Powód techniczny: OCR nie zwrócił tekstu (status: ${ocr.status || "brak"}).`,
+                    ],
+                    timingMs: Date.now() - started,
+                    costUsd: 0,
+                    models: [],
+                    sourcesUsed: [],
+                    sessionId: randomUUID(),
+                    disclaimer: DISCLAIMER_PL,
+                };
+            }
+
+            imagePreview = imageText.slice(0, 200);
+        } catch (error) {
+            console.error("[verify] OCR failure:", technicalReason(error));
+            return {
+                status: "error",
+                language: "pl",
+                input: { kind: "image", preview: "" },
+                summary: "Nie udało się odczytać obrazu. To nie jest werdykt.",
+                claims: [],
+                limitations: [IMAGE_LIMITATION, `Powód techniczny: ${technicalReason(error)}`],
+                timingMs: Date.now() - started,
+                costUsd: 0,
+                models: [],
+                sourcesUsed: [],
+                sessionId: randomUUID(),
+                disclaimer: DISCLAIMER_PL,
+            };
+        }
+    }
+
     const bareUrl = /^https?:\/\/\S+$/i.test(text);
     const targetUrl = url || (bareUrl ? text : "");
+    const inputKind: VerifyResponse["input"]["kind"] = hasImage ? "image" : targetUrl ? "url" : "text";
+    const inputPreview = hasImage ? imagePreview : (url || text).slice(0, 240);
 
     try {
         // An explicit url always wins over surrounding text ("sprawdź to: https://...").
-        const content = targetUrl ? await ReadableText(targetUrl) : text;
+        const parts: string[] = [];
+        if (imageText) parts.push(imageText);
+        parts.push(targetUrl ? await ReadableText(targetUrl) : text);
+        const content = parts.filter((part) => part.length > 0).join("\n\n");
         const pipeline = await runPipeline(content, cache, { asOf: options.asOf });
         const claims: ClaimVerdict[] = [];
         const covered = new Set<string>();
@@ -165,14 +276,15 @@ export async function verifyInput(
         }
 
         const pending = pipeline.claims.filter((claim) => !covered.has(claim.id));
-        let researchCost = 0;
+        // researchUsd is research.costUsd; research does not report a finer split yet.
+        let researchUsd = 0;
         const researchModels: string[] = [];
         if (pending.length > 0) {
             const researched = await researchClaims(pending, {
                 asOf: pipeline.date ?? options.asOf,
             });
             claims.push(...researched.claims);
-            researchCost = researched.costUsd;
+            researchUsd = researched.costUsd;
             researchModels.push(...researched.models);
 
             // Close the loop: verified research becomes cache, so the next identical
@@ -220,6 +332,7 @@ export async function verifyInput(
 
         const sourcesUsed = [...new Set(claims.flatMap((claim) => claim.evidence.map((e) => e.url)))];
         const limitations = [...new Set(claims.flatMap((claim) => claim.limitations))];
+        if (hasImage) limitations.unshift(IMAGE_LIMITATION);
         if (pipeline.injectionSuspected) {
             limitations.push(
                 "W treści wykryto próbę wpływu na instrukcje systemu. Potraktowano ją wyłącznie jako dane do sprawdzenia.",
@@ -230,14 +343,20 @@ export async function verifyInput(
             status: "ok",
             language: "pl",
             input: {
-                kind: targetUrl ? "url" : "text",
-                preview: (url || text).slice(0, 240),
+                kind: inputKind,
+                preview: inputPreview,
             },
             summary: countSummary(claims),
             claims,
             limitations,
             timingMs: Date.now() - started,
-            costUsd: (pipeline.costUsd ?? 0) + researchCost,
+            costUsd: (pipeline.costUsd ?? 0) + researchUsd,
+            costBreakdown: {
+                extractionUsd: pipeline.costBreakdown?.extractionUsd ?? 0,
+                jevUsd: pipeline.costBreakdown?.jevUsd ?? 0,
+                embeddingUsd: pipeline.costBreakdown?.embeddingUsd ?? 0,
+                researchUsd,
+            },
             models: [...new Set([...(pipeline.models ?? []), ...researchModels])],
             sourcesUsed,
             sessionId: randomUUID(),
@@ -248,10 +367,16 @@ export async function verifyInput(
         return {
             status: "error",
             language: "pl",
-            input: { kind: targetUrl ? "url" : "text", preview: (targetUrl || text).slice(0, 200) },
+            input: {
+                kind: inputKind,
+                preview: (hasImage ? imagePreview : targetUrl || text).slice(0, 200),
+            },
             summary: "Nie udało się wykonać sprawdzenia. To nie jest werdykt.",
             claims: [],
-            limitations: ["Błąd techniczny po stronie serwera. Spróbuj ponownie później."],
+            limitations: [
+                ...(hasImage ? [IMAGE_LIMITATION] : []),
+                "Błąd techniczny po stronie serwera. Spróbuj ponownie później.",
+            ],
             timingMs: Date.now() - started,
             costUsd: 0,
             models: [],
