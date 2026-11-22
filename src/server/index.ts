@@ -79,6 +79,24 @@ function html(body: string): Response {
     });
 }
 
+const RATE_WINDOW_MS = 60_000;
+const RATE_MAX = 20;
+const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+
+/** Fixed-window limiter per client IP. Demo-grade, in-memory. */
+function isRateLimited(key: string): boolean {
+    const now = Date.now();
+    const bucket = rateBuckets.get(key);
+
+    if (!bucket || now > bucket.resetAt) {
+        rateBuckets.set(key, { count: 1, resetAt: now + RATE_WINDOW_MS });
+        return false;
+    }
+
+    bucket.count += 1;
+    return bucket.count > RATE_MAX;
+}
+
 export const verificationApi = new Elysia({ name: "verification-api" })
     .onError({ as: "local" }, ({ code, set, error }) => {
         if (code === "VALIDATION" || code === "PARSE") {
@@ -95,11 +113,24 @@ export const verificationApi = new Elysia({ name: "verification-api" })
     })
     .post(
         "/verify",
-        async ({ body, set }) => {
-            const request = body as VerifyBody;
-            const text = typeof request.text === "string" ? request.text.trim() : "";
-            const url = typeof request.url === "string" ? request.url.trim() : "";
-            const channel = request.channel ?? "api";
+        async ({ body, set, request, server }) => {
+            const input = body as VerifyBody;
+            const ip =
+                server?.requestIP(request)?.address ??
+                request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+                "unknown";
+
+            if (isRateLimited(ip)) {
+                set.status = 429;
+                return errorResponse("Zbyt wiele zapytań. Spróbuj ponownie za chwilę.", [
+                    `Limit: ${RATE_MAX} zapytań na minutę.`,
+                    "Nic nie zostało sprawdzone. To nie jest werdykt.",
+                ]);
+            }
+
+            const text = typeof input.text === "string" ? input.text.trim() : "";
+            const url = typeof input.url === "string" ? input.url.trim() : "";
+            const channel = input.channel ?? "api";
 
             if (!text && !url) {
                 set.status = 400;
@@ -130,6 +161,7 @@ export const verificationApi = new Elysia({ name: "verification-api" })
 
                 void logVerification({
                     sessionId: response.sessionId,
+                    question: response.input.preview,
                     status: response.status,
                     timingMs: response.timingMs,
                     claims: response.claims,
@@ -157,6 +189,7 @@ export const verificationApi = new Elysia({ name: "verification-api" })
 
                 void logVerification({
                     sessionId: failed.sessionId,
+                    question: failed.input.preview,
                     status: "error",
                     timingMs: 0,
                     claims: [],

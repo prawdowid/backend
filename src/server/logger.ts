@@ -28,6 +28,8 @@ const VERDICTS: readonly Verdict[] = [
 
 export type VerificationLogEntry = {
     sessionId: string;
+    /** First 200 chars of the input, masked before writing. */
+    question: string;
     status: OutcomeStatus;
     timingMs: number;
     claims: ClaimVerdict[];
@@ -92,6 +94,12 @@ function record(entry: VerificationLogEntry): void {
     }
 }
 
+function maskPII(value: string): string {
+    return value
+        .replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, "[email]")
+        .replace(/\+?\d[\d\s-]{7,}\d/g, "[numer]");
+}
+
 function percentile(sorted: readonly number[], p: number): number {
     if (sorted.length === 0) return 0;
     const rank = Math.ceil((p / 100) * sorted.length) - 1;
@@ -103,7 +111,7 @@ function percentile(sorted: readonly number[], p: number): number {
 export async function logVerification(entry: VerificationLogEntry): Promise<void> {
     record(entry);
 
-    const line = `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`;
+    const line = `${maskPII(JSON.stringify({ ts: new Date().toISOString(), ...entry }))}\n`;
 
     writeChain = writeChain
         .then(async () => {
