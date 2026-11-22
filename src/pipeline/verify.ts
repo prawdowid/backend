@@ -3,6 +3,7 @@ import { runPipeline, type CacheStore } from ".";
 import { FileCacheStore } from "./filestore";
 import { researchClaims } from "../research";
 import { Markdown } from "../modules/utils";
+import { OpenRouterWrapper } from "../modules/openrouter";
 import {
     DISCLAIMER_PL,
     type ClaimVerdict,
@@ -169,6 +170,48 @@ export async function verifyInput(
             claims.push(...researched.claims);
             researchCost = researched.costUsd;
             researchModels.push(...researched.models);
+
+            // Close the loop: verified research becomes cache, so the next identical
+            // claim is an exact hit instead of another network round-trip.
+            try {
+                const cacheable = researched.claims.filter(
+                    (claim) =>
+                        claim.evidence.length > 0 &&
+                        (claim.verdict === "confirmed" || claim.verdict === "false" || claim.verdict === "misleading"),
+                );
+                if (cacheable.length > 0) {
+                    const checkedAt = new Date().toISOString();
+                    const vectors = await OpenRouterWrapper.Embed(cacheable.map((claim) => claim.claim));
+
+                    for (let i = 0; i < cacheable.length; i++) {
+                        const result = cacheable[i]!;
+                        const source = pending.find((claim) => claim.id === result.id);
+                        if (!source) continue;
+
+                        const cacheVerdict =
+                            result.verdict === "confirmed"
+                                ? "true"
+                                : result.verdict === "false"
+                                  ? "false"
+                                  : "mixed";
+
+                        await cache.put({
+                            id: source.id,
+                            key: source.key,
+                            text: source.text,
+                            details: source.details,
+                            verdict: cacheVerdict,
+                            sources: result.evidence.map((item) => item.url),
+                            checkedAt,
+                            embedding: vectors[i]!,
+                            validFrom: source.fact.t ?? null,
+                            validUntil: null,
+                        });
+                    }
+                }
+            } catch (error) {
+                console.error("[verify] cache write failed:", (error as Error).message);
+            }
         }
 
         const sourcesUsed = [...new Set(claims.flatMap((claim) => claim.evidence.map((e) => e.url)))];
