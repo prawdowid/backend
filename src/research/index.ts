@@ -42,7 +42,7 @@ const CONTENT_FETCH_LIMIT = 3;
 /** Markdown() has no AbortSignal, so we race it against this budget. */
 const CONTENT_FETCH_TIMEOUT_MS = 4000;
 /** Total wall-clock budget for page fetches across one request. */
-const RESEARCH_FETCH_BUDGET_MS = 26_000;
+const RESEARCH_FETCH_BUDGET_MS = 18_000;
 /** A page can be a book; the matcher only needs the beginning. */
 const CONTENT_MAX_CHARS = 20_000;
 const GOOGLE_PAGE_SIZE = 5;

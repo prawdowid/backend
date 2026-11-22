@@ -39,9 +39,10 @@ export async function fetchWithProxy(url: string | URL, init: FetchInit = {}): P
         const proxy = nextProxy();
         try {
             const response = await fetch(url, { ...init, proxy } as RequestInit);
-            if (response.status === 429 && attempt < attempts - 1) {
+            if (response.status === 429) {
                 lastError = new Error(`proxy 429 (${attempt + 1}/${attempts})`);
-                continue;
+                if (attempt < attempts - 1) continue;
+                break;
             }
             return response;
         } catch (error) {
@@ -49,5 +50,10 @@ export async function fetchWithProxy(url: string | URL, init: FetchInit = {}): P
         }
     }
 
-    throw lastError instanceof Error ? lastError : new Error("proxy request failed");
+    // Last resort: direct request without a proxy (some hosts block proxy ranges).
+    try {
+        return await fetch(url, init as RequestInit);
+    } catch {
+        throw lastError instanceof Error ? lastError : new Error("proxy request failed");
+    }
 }

@@ -222,7 +222,7 @@ async function extractClaims(
     text: string,
 ): Promise<{ lang: string; date: string | null; claims: Claim[]; costUsd: number }> {
     // Strip the delimiter so user content cannot break out of the data block.
-    const safeText = text.replace(/<\/?ARTICLE>/gi, "");
+    const safeText = text.slice(0, 20_000).replace(/<\/?ARTICLE>/gi, "");
     const user = `<ARTICLE>\n${safeText}\n</ARTICLE>`;
     let parsed: Summarize | undefined;
     let promptTokens = 0;
@@ -254,9 +254,13 @@ async function extractClaims(
 
     const claims: Claim[] = [];
     const seen = new Set<string>();
+    const articleNorm = normalize(safeText);
 
     const consume = (data: Summarize): void => {
         for (const fact of data.facts ?? []) {
+            const quoteNorm = normalize(fact.q ?? "");
+            if (quoteNorm.length >= 10 && !articleNorm.includes(quoteNorm)) continue;
+
             for (const relation of fact.c ?? []) {
                 if (!relation.s || !relation.p || relation.o === undefined) continue;
 
@@ -302,6 +306,9 @@ async function extractClaims(
             }
         }
     }
+
+    // Hard cap: the extraction prompt asks for 8; the model sometimes returns 20+.
+    claims.length = Math.min(claims.length, 8);
 
     return {
         lang: parsed.lang ?? "pl",
