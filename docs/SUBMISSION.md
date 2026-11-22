@@ -2,7 +2,7 @@
 
 ## Zespół
 
-- Nazwa zespołu: **[UZUPEŁNIJ]**
+- Nazwa zespołu: **KN Neuron Prawdowid** (UMG, Wydział Informatyczny)
 - Tytuł: **PRAWDOWID — weryfikacja doniesień oparta na źródłach**
 - Repozytorium: **https://github.com/prawdowid/backend**
 - Demo: `bun install && bun run dev` → `http://localhost:3000`
