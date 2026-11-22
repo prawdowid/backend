@@ -136,8 +136,10 @@ const NATIONALITY_PATTERNS = [
 const NATIONALITY_KEYS: Record<string, string> = {
     polish: "polish",
     polak: "polish",
+    polka: "polish",
     ukrainian: "ukrainian",
     ukrainiec: "ukrainian",
+    ukrainka: "ukrainian",
     german: "german",
     niemiec: "german",
     russian: "russian",

@@ -1049,7 +1049,7 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
                 }
             }
 
-            if (reviewVerdicts.length === 0) {
+            if (reviewVerdicts.length === 0 && !isMetaFactCheck) {
                 limitations.push("Brak oceny fact-checkingowej dla tego zdania.");
             }
         } catch {
