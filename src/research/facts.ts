@@ -101,6 +101,72 @@ export function electionRoundEvidence(
     };
 }
 
+const EU_URL =
+    "https://european-union.europa.eu/principles-countries-history/country-profiles/poland_pl";
+const NATO_URL = "https://www.nato.int/cps/pl/natohq/topics_52044.htm";
+
+/**
+ * Poland's EU and NATO accession dates are fixed public facts. Checking them
+ * locally prevents a bad lexical hit from refuting a true membership claim.
+ */
+export function membershipEvidence(claim: ClaimInput, retrievedAt: string): Evidence | null {
+    const fact = claim.fact;
+    if (!fact) return null;
+
+    const subject = norm(fact.s);
+    const object = norm(fact.o);
+    const predicate = norm(fact.p);
+    const text = norm(`${claim.text} ${claim.quote ?? ""} ${claim.details ?? ""}`);
+    if (!/\b(polska|poland|rzeczpospolita)\b/.test(subject)) return null;
+
+    const membership =
+        /member|czlon|nalezy|joined|join\b|wstap|wstąp|przystap|przystąp|accession|dolacz|dołącz/.test(
+            predicate + " " + text,
+        );
+    if (!membership) return null;
+
+    const eu = /unia europejska|\bue\b|european union/.test(object + " " + text);
+    const nato = /\bnato\b/.test(object + " " + text);
+    if (!eu && !nato) return null;
+
+    const actualYear = eu ? 2004 : 1999;
+    const claimedYear = Number(/\b(19\d{2}|20\d{2})\b/.exec(text)?.[1]);
+    const relation = claimedYear && claimedYear !== actualYear ? "refutes" : "supports";
+
+    return {
+        title: eu
+            ? "Polska w Unii Europejskiej — profil kraju"
+            : "Polska w NATO — informacje podstawowe",
+        publisher: eu ? "Komisja Europejska" : "NATO",
+        publishedAt: null,
+        retrievedAt,
+        url: eu ? EU_URL : NATO_URL,
+        excerpt: eu
+            ? `Polska jest członkiem Unii Europejskiej od 1 maja 2004 r.` +
+              (claimedYear && claimedYear !== actualYear
+                  ? ` Twierdzenie podaje ${claimedYear} r., co się nie zgadza.`
+                  : "")
+            : `Polska jest członkiem NATO od 12 marca 1999 r.` +
+              (claimedYear && claimedYear !== actualYear
+                  ? ` Twierdzenie podaje ${claimedYear} r., co się nie zgadza.`
+                  : ""),
+        type: "primary",
+        relation,
+    };
+}
+
+/**
+ * One deterministic answer for the facts we can settle without search.
+ * Returns null when the claim is outside these small tables.
+ */
+export function commonFactEvidence(claim: ClaimInput, retrievedAt: string): Evidence | null {
+    return (
+        membershipEvidence(claim, retrievedAt) ??
+        currencyEvidence(claim, retrievedAt) ??
+        electionRoundEvidence(claim, retrievedAt)
+    );
+}
+
 const ECB_URL = "https://www.ecb.europa.eu/euro/html/index.pl.html";
 
 export function currencyEvidence(claim: ClaimInput, retrievedAt: string): Evidence | null {

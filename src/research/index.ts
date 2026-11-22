@@ -18,7 +18,7 @@ import { searchSources } from "../sources";
 import { searchDisinfoCases } from "./euvsdisinfo";
 import { searchWeb } from "./search";
 import { wikidataEvidence } from "./wikidata";
-import { currencyEvidence, electionRoundEvidence } from "./facts";
+import { commonFactEvidence, currencyEvidence, electionRoundEvidence } from "./facts";
 import { searchCorpusDocuments } from "./corpus-docs";
 import { fetchWithProxy } from "../modules/proxy";
 import type {
@@ -808,6 +808,39 @@ function fallbackVerdict(claim: ClaimInput, asOf: string, limitation: string): C
             verdict: fallbackVerdict(claim, ctx.asOf, "Przekroczono limit czasu researchu."),
             googleUsed: false,
         };
+    }
+
+    // --- deterministic facts short-circuit -------------------------------
+    // EU/NATO membership, eurozone and election rounds are fixed public facts.
+    // Settle them before search, so a bad lexical hit cannot refute them.
+    if (!ctx.offline) {
+        const deterministic = commonFactEvidence(claim, retrievedAt);
+        if (deterministic) {
+            const decision = decide({
+                factCheckVerdict: null,
+                independentSupports: 1,
+                hasPrimarySupport: deterministic.type === "primary",
+                supports: deterministic.relation === "supports" ? [deterministic] : [],
+                refutes: deterministic.relation === "refutes" ? [deterministic] : [],
+                hasAnyEvidence: true,
+                notVerifiable: false,
+            });
+            return {
+                verdict: {
+                    id: claim.id,
+                    claim: claimTextFor(claim),
+                    verdict: decision.verdict,
+                    confidence: roundConfidence(decision.confidence),
+                    strength: strengthOf(roundConfidence(decision.confidence)),
+                    reasoning: decision.reasoning,
+                    evidence: [deterministic],
+                    limitations: ["Użyto deterministycznego faktu publicznego."],
+                    asOf: ctx.asOf,
+                    cached: false,
+                },
+                googleUsed: false,
+            };
+        }
     }
 
     // --- a) local corpus ---------------------------------------------------
