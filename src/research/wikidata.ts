@@ -25,7 +25,7 @@ const API_ENDPOINT = "https://www.wikidata.org/w/api.php";
 const USER_AGENT = "PrawdowidBot/1.0 (fact-checking prototype; contact: local)";
 const REQUEST_TIMEOUT_MS = 8000;
 /** Wikidata asks for serial requests; one claim needs 2-4 of them. */
-const MIN_REQUEST_GAP_MS = 900;
+const MIN_REQUEST_GAP_MS = 250;
 const SEARCH_LIMIT = 5;
 const MAX_CANDIDATES = 5;
 const MAX_BATCH_IDS = 20;

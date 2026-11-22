@@ -40,7 +40,7 @@ const CONTENT_FETCH_LIMIT = 3;
 /** Markdown() has no AbortSignal, so we race it against this budget. */
 const CONTENT_FETCH_TIMEOUT_MS = 4000;
 /** Total wall-clock budget for page fetches across one request. */
-const RESEARCH_FETCH_BUDGET_MS = 12_000;
+const RESEARCH_FETCH_BUDGET_MS = 18_000;
 /** A page can be a book; the matcher only needs the beginning. */
 const CONTENT_MAX_CHARS = 20_000;
 const GOOGLE_PAGE_SIZE = 5;
@@ -757,6 +757,14 @@ async function researchOne(
     const seenUrls = new Set<string>();
     const retrievedAt = new Date().toISOString();
 
+    // Hard wall-clock guard: keep the whole request well under the 30 s target.
+    if (!ctx.offline && Date.now() >= ctx.deadline) {
+        return {
+            verdict: fallbackVerdict(claim, ctx.asOf, "Przekroczono limit czasu researchu."),
+            googleUsed: false,
+        };
+    }
+
     // --- a) local corpus ---------------------------------------------------
     let hits: SourceHit[] = [];
     try {
@@ -1156,28 +1164,57 @@ export async function researchClaims(
             ? Math.floor(options.maxClaims)
             : claims.length;
 
-    const verdicts: ClaimVerdict[] = [];
+    const verdicts = new Array<ClaimVerdict>(claims.length);
     let googleUsed = false;
+    const concurrency = Math.min(4, claims.length);
+    let cursor = 0;
 
-    for (let i = 0; i < claims.length; i++) {
-        const claim = claims[i]!;
+    const workers = Array.from({ length: concurrency }, async () => {
+        while (true) {
+            const index = cursor++;
+            if (index >= claims.length) return;
 
-        if (i >= cap) {
-            verdicts.push(
-                fallbackVerdict(claim, asOf, "Limit liczby twierdzeń — tego twierdzenia nie sprawdzono."),
-            );
-            continue;
+            const claim = claims[index]!;
+            if (index >= cap) {
+                verdicts[index] = fallbackVerdict(
+                    claim,
+                    asOf,
+                    "Limit liczby twierdzen - tego twierdzenia nie sprawdzono.",
+                );
+                continue;
+            }
+
+            try {
+                const result = await Promise.race([
+                    researchOne(claim, { offline, asOf, deadline }),
+                    new Promise<OneClaimResult>((resolve) => {
+                        setTimeout(
+                            () =>
+                                resolve({
+                                    verdict: fallbackVerdict(
+                                        claim,
+                                        asOf,
+                                        "Przekroczono limit czasu researchu.",
+                                    ),
+                                    googleUsed: false,
+                                }),
+                            10_000,
+                        );
+                    }),
+                ]);
+                if (result.googleUsed) googleUsed = true;
+                verdicts[index] = result.verdict;
+            } catch {
+                verdicts[index] = fallbackVerdict(
+                    claim,
+                    asOf,
+                    "Wystapil blad wewnetrzny podczas sprawdzania.",
+                );
+            }
         }
+    });
 
-        try {
-            const result = await researchOne(claim, { offline, asOf, deadline });
-            if (result.googleUsed) googleUsed = true;
-            verdicts.push(result.verdict);
-        } catch {
-            // One broken claim must never sink the whole batch.
-            verdicts.push(fallbackVerdict(claim, asOf, "Wystąpił błąd wewnętrzny podczas sprawdzania."));
-        }
-    }
+    await Promise.all(workers);
 
     const sourcesUsed: string[] = [];
     const seenSources = new Set<string>();

@@ -1,4 +1,32 @@
+import { appendFile, mkdir } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 const DEFAULT_ENDPOINT = "https://factchecktools.googleapis.com/v1alpha1/claims:search";
+
+/** Quota accounting: one line per outbound Google Fact Check request. */
+const CALLS_LOG = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "data",
+    "metrics",
+    "google-calls.jsonl",
+);
+
+let calls = 0;
+
+function recordCall(ok: boolean): void {
+    calls += 1;
+    const line = `${JSON.stringify({ ts: new Date().toISOString(), ok })}\n`;
+    void mkdir(dirname(CALLS_LOG), { recursive: true })
+        .then(() => appendFile(CALLS_LOG, line, "utf8"))
+        .catch(() => undefined);
+}
+
+export function googleCallsThisProcess(): number {
+    return calls;
+}
 
 export interface FactCheckPublisher {
     name: string;
@@ -66,9 +94,16 @@ export class GoogleFactCheck {
         }
 
         const endpoint = process.env["GOOGLE_FACT_CHECK_URL"] ?? DEFAULT_ENDPOINT;
-        const response = await fetch(`${endpoint}?${params}`, {
-            headers: { accept: "application/json" },
-        });
+        let response: Response;
+        try {
+            response = await fetch(`${endpoint}?${params}`, {
+                headers: { accept: "application/json" },
+            });
+        } catch (error) {
+            recordCall(false);
+            throw error;
+        }
+        recordCall(response.ok);
 
         if (!response.ok) {
             const detail = await response.text().catch(() => "");
