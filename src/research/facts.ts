@@ -155,6 +155,74 @@ export function membershipEvidence(claim: ClaimInput, retrievedAt: string): Evid
     };
 }
 
+const PRESIDENTIAL_WINNERS: Record<number, string[]> = {
+    1990: ["walesa", "wałęsa", "lech wałęsa"],
+    1995: ["kwasniewski", "kwaśniewski", "aleksander kwaśniewski"],
+    2000: ["kwasniewski", "kwaśniewski", "aleksander kwaśniewski"],
+    2005: ["kaczynski", "kaczyński", "lech kaczyński"],
+    2010: ["komorowski", "bronisław komorowski"],
+    2015: ["duda", "andrzej duda"],
+    2020: ["duda", "andrzej duda"],
+    2025: ["nawrocki", "karol nawrocki"],
+};
+
+const WINNER_DISPLAY: Record<number, string> = {
+    1990: "Lech Wałęsa",
+    1995: "Aleksander Kwaśniewski",
+    2000: "Aleksander Kwaśniewski",
+    2005: "Lech Kaczyński",
+    2010: "Bronisław Komorowski",
+    2015: "Andrzej Duda",
+    2020: "Andrzej Duda",
+    2025: "Karol Nawrocki",
+};
+
+/**
+ * Who won the Polish presidential election in a given year. Covers the direct
+ * "X won the YYYY election" claim, including the reversed "X lost to Y" form.
+ */
+export function electionWinnerEvidence(
+    claim: ClaimInput,
+    retrievedAt: string,
+): Evidence | null {
+    const text = norm(`${claim.text} ${claim.quote ?? ""} ${claim.details ?? ""}`);
+    if (!/wybory prezydenckie|presidential election/.test(text)) return null;
+
+    const year = Number(/\b(19\d{2}|20\d{2})\b/.exec(text)?.[1]);
+    const winners = PRESIDENTIAL_WINNERS[year];
+    if (!winners) return null;
+
+    const subject = norm(claim.fact?.s ?? "");
+    if (!subject) return null;
+    const expected = winners.find(
+        (winner) => subject.includes(winner) || winner.includes(subject),
+    );
+    if (!expected) return null;
+
+    const lost = /\b(przegra\w*|lost|defeated by)\b/.test(text);
+    const won = /\b(wygra\w*|won|zwyciez\w*|zwycięz\w*)\b/.test(text);
+    if (!lost && !won) return null;
+
+    const claimSaysWinner = !lost;
+    const relation = claimSaysWinner ? "supports" : "refutes";
+
+    return {
+        title: `Wybory prezydenckie w Polsce w ${year} roku — wynik`,
+        publisher: "Wikipedia (pl)",
+        publishedAt: null,
+        retrievedAt,
+        url: `https://pl.wikipedia.org/wiki/Wybory_prezydenckie_w_Polsce_w_${year}_roku`,
+        excerpt:
+            `Wybory prezydenckie w Polsce w ${year} roku wygrał ` +
+            `${WINNER_DISPLAY[year] ?? winners[winners.length - 1]}.` +
+            (relation === "refutes"
+                ? " Twierdzenie przypisuje zwycięstwo lub porażkę niezgodnie z wynikiem."
+                : ""),
+        type: "secondary",
+        relation,
+    };
+}
+
 /**
  * One deterministic answer for the facts we can settle without search.
  * Returns null when the claim is outside these small tables.
@@ -163,7 +231,8 @@ export function commonFactEvidence(claim: ClaimInput, retrievedAt: string): Evid
     return (
         membershipEvidence(claim, retrievedAt) ??
         currencyEvidence(claim, retrievedAt) ??
-        electionRoundEvidence(claim, retrievedAt)
+        electionRoundEvidence(claim, retrievedAt) ??
+        electionWinnerEvidence(claim, retrievedAt)
     );
 }
 
