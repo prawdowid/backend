@@ -1,177 +1,180 @@
-# PRAWDOWID — backend
+# PRAWDOWID — backend weryfikacji doniesień oparty na źródłach
 
-Weryfikacja doniesień oparta na źródłach, nie na opinii modelu. System przyjmuje tekst lub URL,
-wyciąga sprawdzalne twierdzenia, szuka dowodów w korpusie źródeł i Google Fact Check Tools,
-a gdy dowodów brakuje — **wstrzymuje się od rozstrzygnięcia**.
+PRAWDOWID przyjmuje tekst, adres URL, a także obraz z tekstem, rozkłada przekaz na sprawdzalne twierdzenia i zwraca werdykt wraz z dowodami. Wiarygodność wyniku nie wynika z deklarowanej pewności modelu: każda rozstrzygnięta teza ma prowadzić do cytatu, daty, wydawcy i adresu źródła, a brak wystarczającego dowodu prowadzi do wstrzymania werdyktu.
 
-## Uruchomienie
+To prototyp hackathonowy, którego działanie, metryki i granice są opisane w repozytorium. Nie jest opinią prawną ani zastępstwem dla analizy eksperckiej.
 
-```bash
-bun install
-cp .env.example .env   # uzupełnij klucze
-bun run dev            # http://localhost:3000
+## Dlaczego to ważne
+
+Dezinformacja często korzysta z prawdziwie brzmiących fragmentów: przywołuje instytucje, liczby lub wydarzenia, ale pomija czas, kontekst albo źródło. W polskim obiegu informacyjnym sprawdzenie twierdzeń dotyczących prawa, wyborów, danych publicznych czy polityki zagranicznej powinno w pierwszej kolejności sięgać do źródeł właściwych dla danej sprawy — na przykład aktów prawnych, komunikatów urzędowych, danych statystyki publicznej albo obwieszczeń wyborczych.
+
+PRAWDOWID nie traktuje odpowiedzi modelu językowego jako dowodu. Używa modelu do technicznych etapów przetwarzania tekstu, natomiast wynik przedstawia z materiałem źródłowym i jego metadanymi. Dzięki temu odbiorca może samodzielnie ocenić podstawę wniosku oraz sprawdzić jej aktualność.
+
+## Jak działa
+
+1. **Wejście.** API przyjmuje tekst, URL lub obraz z tekstem. Tekst pod wskazanym URL jest odczytywany przed dalszym przetwarzaniem; dla obrazu stosowany jest OCR, a odpowiedź zawiera ograniczenie dotyczące niepewności metadanych obrazu.
+2. **Ekstrakcja twierdzeń.** Przekaz jest dzielony na atomowe relacje podmiot–orzeczenie–obiekt (SPO). Zdania złożone są rozbijane na odrębne twierdzenia, aby nie przypisać jednego dowodu do kilku różnych tez.
+3. **Cache zależny od czasu.** Najpierw system szuka dokładnego klucza twierdzenia, potem używa embeddingów do utworzenia krótkiej listy podobnych wpisów. Każdy wpis może mieć granice `validFrom` i `validUntil`; dopasowanie uwzględnia datę materiału (`asOf`) albo bieżącą datę.
+4. **Research.** Dla twierdzeń nieznalezionych w cache przeszukiwane są źródła z manifestu, lokalny korpus dokumentów oraz — po skonfigurowaniu — Google Fact Check Tools. Lokalne snapshoty EUvsDisinfo są przeszukiwane bez tokenu w czasie działania; token jest potrzebny jedynie do ich odświeżenia.
+5. **Werdykt i dowody.** Odpowiedź zawiera werdykt dla każdego twierdzenia, uzasadnienie, ograniczenia, siłę odpowiedzi i listę dowodów. **Brak dowodu oznacza wstrzymanie, a nie zgadywanie**: system zwraca wtedy `insufficient_evidence`.
+
+### Werdykty i statusy
+
+Werdykt twierdzenia ma jedną z wartości:
+
+`confirmed` · `false` · `misleading` · `insufficient_evidence` · `not_verifiable`
+
+`error` (błąd techniczny) oraz `needs_clarification` (potrzeba doprecyzowania) są statusami obsługi żądania, a nie werdyktami. Awaria zależności zewnętrznej kończy się statusem `error`, nie twierdzeniem o prawdziwości lub fałszywości informacji.
+
+## Dlaczego dane są dokładne i możliwe do zweryfikowania
+
+### Hierarchia i ślad dowodowy
+
+Manifest `src/sources/manifest.ts` zawiera **135 pozycji**: **104** źródła `primary`, **21** `secondary` i **10** `fact_check`. Typ opisuje charakter źródła i jest jawny w odpowiedzi; sam w sobie nie przesądza o werdykcie.
+
+- **`primary`** — przede wszystkim źródła urzędowe i publiczne, m.in. Gov.pl, Dziennik Ustaw, Monitor Polski, ISAP, PKW, GUS, NBP, MSZ oraz EUR-Lex;
+- **`secondary`** — materiały pomocnicze i informacyjne, używane z oznaczeniem ich charakteru;
+- **`fact_check`** — publikacje i bazy weryfikacyjne, m.in. Demagog, AFP Fact Check, EUvsDisinfo, EDMO i Google Fact Check Tools.
+
+Każdy dowód zwracany przez API zawiera tytuł, wydawcę, datę publikacji, datę pobrania, URL, fragment cytowany oraz relację z twierdzeniem (`supports`, `refutes` lub `context`). W przypadku treści prasowych i fact-checkingowych system przechowuje krótkie fragmenty, a nie pełne artykuły.
+
+### Czas, konflikty i wstrzymanie
+
+Wpis cache nie jest bezterminową odpowiedzią. Pola `validFrom` i `validUntil` określają, kiedy dana propozycja obowiązuje, co pozwala rozróżniać stan sprzed i po zdarzeniu. Materiał archiwalny powinien być oceniany w odniesieniu do swojej daty, a nie wyłącznie do stanu bieżącego.
+
+Gdy źródła nie pozwalają rzetelnie potwierdzić ani obalić tezy, odpowiedzią jest `insufficient_evidence`. Werdykt `misleading` służy m.in. sytuacjom, gdy rdzeń przekazu jest częściowo prawdziwy, lecz istotny kwalifikator lub kontekst są niezgodne z dowodami. System nie przedstawia braku publikacji w bazie jako dowodu prawdziwości.
+
+### Ewaluacja
+
+W ostatnim udokumentowanym przebiegu z **22 listopada 2026 r.** (cold cache) zestaw ewaluacyjny obejmował 30 przypadków, z czego 24 wchodziły do oceny accuracy i macro-F1. Wyniki zapisane w [`docs/EVAL.md`](docs/EVAL.md) to:
+
+| Metryka | Wynik |
+|---|---:|
+| accuracy (24 oceniane przypadki) | 75,0% (18/24) |
+| macro-F1 | 0,767 |
+| wstrzymanie przy braku dowodów | 100% (6/6) |
+| pokrycie cytowań | 100% (45/45) |
+| wykrycie prompt injection | 100% (4/4) |
+| mediana odpowiedzi | 6 031 ms |
+| p95 | 15 661 ms |
+| E2E | 19/19 |
+
+Wynik zależy od lokalnych danych, sieci i dostępności dostawców. Ekstrakcja twierdzeń nie jest w pełni deterministyczna; dokumentacja opisuje wprost, że między uruchomieniami możliwa jest różnica 1–2 przypadków.
+
+## Dlaczego lookupy są tanie
+
+Ścieżka jest **cache-first**. Dokładne trafienie omija ponowny research, a embeddingi tworzą krótką listę kandydatów zamiast porównywania każdego twierdzenia z całym cache. Lokalny korpus i lokalny snapshot EUvsDisinfo ograniczają liczbę zapytań do usług zewnętrznych.
+
+Trafienie w cache nie oznacza kosztu zerowego: ekstrakcja twierdzeń jest wykonywana zawsze, podobnie jak embeddingi niezbędne do dopasowania. Pozwala jednak pominąć research (w tym Google, Wikidata, Wikipedię i EUvsDisinfo) oraz bramki porównujące twierdzenia. Przy skutecznym trafieniu nie ma dodatkowego lookupu researchowego do płatnego API; koszt samej ekstrakcji lub embeddingów może pozostać.
+
+Pomiar pięciu przypadków w [`docs/EVAL.md`](docs/EVAL.md) wykazał łączny koszt **0,003269 USD** dla cold cache i **0,002121 USD** dla warm cache, czyli spadek o **35,1%**. W ostatnim przebiegu ewaluacji koszt cold wyniósł **0,000473 USD na zapytanie** (około **0,047 USD / 100**). Dla krótkich przypadków w osobnym pomiarze warm cache redukował koszt o 77–83%; dla długiego artykułu bez zcache’owanych, rozstrzygniętych twierdzeń oszczędność nie wystąpiła.
+
+## Architektura
+
+```text
+WWW / API / zewnętrzny bot Discord
+                │
+                ▼
+          POST /verify
+                │
+                ▼
+          verifyInput()
+                │
+                ├── ekstrakcja atomowych twierdzeń SPO
+                ├── embeddingi bge-m3 i shortlist kandydatów
+                ├── cache z oknami validFrom / validUntil
+                │   └── pliki JSON domyślnie lub MySQL po ustawieniu MYSQL_URL
+                ├── research: manifest, lokalny korpus, EUvsDisinfo,
+                │   Google Fact Check Tools (opcjonalnie)
+                └── pętla informacji dla spraw nierozstrzygniętych
+                │
+                ▼
+ VerifyResponse: werdykty, dowody, ograniczenia, siła, koszt i czas
 ```
 
-Wymagane: `OPENROUTER_API_KEY`. Opcjonalne: `GOOGLE_FACT_CHECK_API_KEY` (dowody fact-checkingowe).
-Bez klucza Google system nadal działa, ale raportuje ograniczenie. Kanał Discord jest osobnym
-repozytorium i woła ten sam endpoint `POST /verify`.
+Kanały WWW i API korzystają z tej samej funkcji `verifyInput`; zewnętrzny bot Discord jest utrzymywany w osobnym repozytorium i wywołuje `POST /verify`. W testach E2E odnotowano identyczne werdykty dla kanałów web/API.
 
-## Endpointy
+### Endpointy
 
 | Metoda | Ścieżka | Opis |
 |---|---|---|
-| POST | `/verify` | `{ text?, url?, channel? }` → `VerifyResponse` |
-| GET | `/health` | status procesu |
-| GET | `/metrics` | liczniki, p50/p95, średni koszt |
-| GET | `/cases` | nierozstrzygnięte, pogrupowane pytania |
-| POST | `/cases/:id/ack` | moderator bierze sprawę |
-| GET | `/` | interfejs WWW (PL, bez CDN) |
-| GET | `/docs` | Swagger |
+| `POST` | `/verify` | Przyjmuje `{ text?, url?, image?, channel? }` i zwraca `VerifyResponse`. |
+| `GET` | `/health` | Stan procesu, czas działania i wersja. |
+| `GET` | `/metrics` | Liczniki, p50/p95 i średni koszt. |
+| `GET` | `/cases` | Nierozstrzygnięte sprawy moderatora. |
+| `POST` | `/cases/:id/ack` | Potwierdzenie przejęcia sprawy przez moderatora. |
+| `GET` | `/` | Polski interfejs WWW, bez CDN. |
+| `GET` | `/docs` | Dokumentacja Swagger. |
+
+`POST /verify` ma limit **20 zapytań na minutę na adres IP**. Limit jest pamięciowy i przeznaczony dla demonstracji, nie jest rozproszonym mechanizmem produkcyjnym.
+
+## Szybki start
+
+Wymagany jest [Bun](https://bun.sh/) oraz klucz `OPENROUTER_API_KEY`.
+
+```bash
+bun install
+cp .env.example .env
+# uzupełnij OPENROUTER_API_KEY w pliku .env
+bun run dev
+```
+
+Serwer domyślnie działa pod adresem `http://localhost:3000`. Interfejs WWW jest dostępny pod `/`, a dokumentacja API pod `/docs`.
+
+### Konfiguracja środowiska
+
+Najważniejsze zmienne z [`.env.example`](.env.example):
+
+| Zmienna | Rola | Wymagana |
+|---|---|---|
+| `OPENROUTER_API_KEY` | ekstrakcja, bramka porównująca i embeddingi | tak |
+| `GOOGLE_FACT_CHECK_API_KEY` | dowody z Google Fact Check Tools | nie |
+| `MYSQL_URL` | MySQL zamiast domyślnego cache’u plikowego | nie |
+| `EUVD_TOKEN` | odświeżenie lokalnego snapshotu EUvsDisinfo | tylko do ingestu |
+| `MODERATOR_WEBHOOK_URL` | powiadomienie o powtarzających się sprawach | nie |
+| `PORT` | port serwera; domyślnie `3000` | nie |
+
+Bez klucza Google system działa, ale raportuje ograniczenie. Runtime nie potrzebuje tokenu EUvsDisinfo, jeśli lokalny snapshot już istnieje.
+
+### Demo API
 
 ```bash
 curl -s localhost:3000/verify -H 'content-type: application/json' \
   -d '{"text":"Rafał Brzoska został postrzelony w Warszawie."}' | jq
 ```
 
-## Architektura
-
-```
-kanał (WWW / API / zewnętrzny bot Discord)
-        │
-        ▼
-   verifyInput()                 src/pipeline/verify.ts
-        │
-        ├─ 1. gate Jev           political score (raportowany, nie blokuje)
-        ├─ 2. ekstrakcja         DeepSeek v4.1 Flash (OpenRouter, reasoning OFF)
-        │                        MASTERPROMPT → fakty → atomowe SPO
-        ├─ 3. embeddingi         bge-m3 (PL), shortlist cache
-        ├─ 4. cache              FileCacheStore / Redis (3 metody)
-        │                        exact key → Jev choice+noul → wpis
-        └─ 5. research           korpus 122 źródeł + Google Fact Check
-                                 → werdykt + dowody + siła
-        ▼
-   VerifyResponse (werdykt, dowody, ograniczenia, koszt, czas)
-```
-
-Kanały są cienkie: **WWW i zewnętrzny bot wołają dokładnie tę samą funkcję `verifyInput`**, więc wynik
-merytoryczny jest identyczny (wymóg spójności kanałów).
-
-### Werdykty
-
-`confirmed` · `false` · `misleading` · `insufficient_evidence` · `not_verifiable`
-
-Błąd techniczny (`error`) i prośba o doprecyzowanie (`needs_clarification`) są **osobnymi statusami**,
-nigdy werdyktem. Każde twierdzenie zwraca dowody: tytuł, wydawcę, datę, URL i fragment.
-
-### Cache czasowy
-
-`CachedClaim` ma `validFrom` / `validUntil`. Cache trzyma **propozycję**, a `verdict` mówi, czy jest
-prawdziwa w danym oknie. Dzięki temu „Nawrocki wygrał wybory” przed ogłoszeniem wyniku trafia w wpis
-`false` (do dnia wyniku), a po nim — w wpis `true`. Matcher filtruje kandydatów po `asOf`
-(data artykułu lub dziś).
-
-### Źródła
-
-`src/sources/manifest.ts`: **122 rekordy, 29 domen**, typy `primary` (92), `secondary` (22),
-`fact_check` (8) — m.in. Dziennik Ustaw, Monitor Polski, ISAP, PKW, GUS, NBP, EUR-Lex, Demagog,
-AFP Fact Check, EUvsDisinfo, EDMO, NASK.
-
-Audyt linków:
+Podstawowe sprawdzenie typów:
 
 ```bash
-bun run scripts/ingest-sources.ts   # zapisuje data/sources/audit.json
+bun run typecheck
 ```
 
-`searchSources()` embeduje manifest partiami po 32 i zwraca top-k po cosine. Wektory żyją w pamięci
-procesu; przy awarii embeddingów zwraca `[]` zamiast wywalać weryfikację.
+Skrypty ewaluacji i pomiaru kosztu opisuje [`docs/EVAL.md`](docs/EVAL.md).
 
-#### Baza przypadków EUvsDisinfo
+## Ograniczenia i bezpieczeństwo
 
-Serwer MCP EUvsDisinfo udostępnia tylko paginowane listy (`cases`, `articles`), bez wyszukiwania, więc
-pobieramy snapshot przypadków i przeszukujemy go lokalnie. Runtime czyta `data/euvsdisinfo/cases.ndjson`
-i **nie potrzebuje tokenu** — token służy wyłącznie do odświeżenia snapshotu. Dopasowanie jest tokenowe,
-a o tym, czy to naprawdę ta sama teza, decyduje bramka Jev (`noul ≥ 0,8`); bez niej przypadek nie staje
-się dowodem.
+- **Brak dowodu nie jest rozstrzygnięciem.** System zwraca `insufficient_evidence`, gdy nie ma podstaw do uczciwego potwierdzenia lub obalenia tezy.
+- **Ograniczony korpus.** Nie każde twierdzenie ma odpowiednik w lokalnych źródłach lub bazie fact-checkingowej. Brak przypadku w EUvsDisinfo nie jest dowodem prawdziwości.
+- **Aktualność danych.** Cache ma okna ważności, lecz automatyczny scheduler ponownych sprawdzeń nie jest obecnie podłączony. Snapshot EUvsDisinfo wymaga ręcznego odświeżenia.
+- **Zależności zewnętrzne.** Dostępność OpenRoutera, usług embeddingów, OCR oraz opcjonalnych źródeł zewnętrznych wpływa na możliwość przeprowadzenia sprawdzenia.
+- **Prompt injection.** Treść użytkownika jest umieszczana jako dane, a nie instrukcje; heurystyka wykrywa próby wpływu i dodaje ograniczenie do odpowiedzi. Nie przeprowadzono pełnego red-teamingu.
+- **Dane osobowe.** Logi zawierają treść zgłoszenia. Przed wdrożeniem produkcyjnym potrzebne są polityka retencji i maskowanie danych osobowych; w materiałach zgłoszeniowych wskazano maskowanie e-maili i numerów oraz skrypt czyszczący.
+- **Limity wejścia.** Tekst może mieć do 100 000 znaków; obraz PNG/JPEG/WebP — do 8 MB po zdekodowaniu. Odczyt OCR nie jest niezależną weryfikacją obrazu ani jego metadanych.
+- **Moderacja.** Po trzecim podobnym zgłoszeniu system zapisuje alert i może wywołać webhook. Bez webhooka sprawa pozostaje otwarta z jawną rekomendacją przekazania — system nie deklaruje przekazania, którego nie wykonał.
 
-```bash
-EUVD_TOKEN=... bun run scripts/ingest-euvsdisinfo.ts   # EUVD_LIMIT=5000 pobiera więcej
-```
+## Źródła i licencje
 
-Licencje, format snapshotu i ograniczenia: `docs/SOURCES.md`.
+Pełny wykaz źródeł, zasady aktualizacji, format lokalnego snapshotu oraz warunki ponownego użycia opisano w [`docs/SOURCES.md`](docs/SOURCES.md). W skrócie:
 
-### Pętla informacji
+- pełne teksty są przechowywane tylko dla dokumentów urzędowych i publicznych o jasnych zasadach użycia;
+- dla prasy, fact-checkerów i Wikipedii przechowywany jest cytat do 1500 znaków, metadane i link, bez redystrybucji całego artykułu;
+- dokumenty urzędowe są traktowane zgodnie z zasadami wskazanymi w dokumentacji źródeł, a materiały EUR-Lex i EUvsDisinfo wymagają atrybucji;
+- audyt linków manifestu można uruchomić poleceniem `bun run scripts/ingest-sources.ts`; wynik trafia do `data/sources/audit.json`.
 
-Nierozstrzygnięte twierdzenia (`insufficient_evidence`, `not_verifiable`) trafiają do
-`data/moderation/cases.json`. Nowe pytanie jest embedowane i dołączane do najbliższej otwartej
-sprawy (cosine ≥ 0.82), a identyczne pytanie trafia do sprawy bez dodatkowego kosztu.
+---
 
-Przy 3. zgłoszeniu tej samej sprawy system raz wysyła alert:
+**Zespół:** KN Neuron Prawdowid, UMG — Wydział Informatyczny
 
-- zawsze zapisuje go do `data/alerts/alerts.jsonl`,
-- jeśli ustawisz `MODERATOR_WEBHOOK_URL`, robi `POST` z JSON-em i dopiero wtedy `escalated: true`,
-- bez webhooka sprawa zostaje `open` z jawnym `alertReason` „Rekomendacja przekazania…” —
-  system nie twierdzi, że przekazał sprawę, jeśli tego nie zrobił.
+**Wydarzenie:** HackNation 2026
 
-`GET /cases` pokazuje `open`, `escalated` i `recommended` osobno; `POST /cases/:id/ack` zamyka sprawę.
-
-### Skala i baza
-
-Domyślnie cache to pliki JSON w `data/` — wystarcza do kilkuset claimów. Po włączeniu
-`MYSQL_URL` backend używa `MySQLCacheStore`:
-
-```bash
-mysql -u user -p prawdowid < sql/schema.sql
-# .env: MYSQL_URL=mysql://user:pass@host:3306/prawdowid
-```
-
-- embeddingi leżą jako `BLOB` (`Float32Array`, 4 KB na 1024 wymiary), nie JSON,
-- `search()` przegląda ograniczone okno czasowe (domyślnie 2000 najnowszych wierszy)
-  i rerankuje w procesie — bez pełnego skanu tabeli,
-- przy >100k claimów trzeba podmienić okno na ANN (MySQL 9 `VECTOR`, Redis Stack),
-  kontrakt `CacheStore` się nie zmienia,
-- dokumenty źródłowe i dowody mają osobne tabele (`documents`, `evidence`) pod audyt i eksport.
-
-**Newsy trzymamy w MySQL, nie w Redisie.** Redis to warstwa ulotna: hot-cache werdyktów, locki
-`SET NX PX`, rate limit, kolejka rechecków (ZSET). Wyłączenie Redisa ma spowolnić system, nie zmienić
-wyniku. Zasady dla `documents`:
-
-- dokument to **niezmienna wersja**: `(source_id, content_hash)` unique, a ten sam `canonical_url`
-  z nową treścią to nowy wiersz (`fetched_at`), nie nadpisanie,
-- pełny tekst tylko dla dokumentów urzędowych/publicznych z jasną licencją,
-- dla newsów i mediów: `excerpt` (≤1500 znaków) + metadane + `content_hash` + link — bez
-  redystrybucji całego artykułu,
-- bez `FULLTEXT` na te 24h: `LIKE` po `title`/`excerpt` + embeddingi wystarczą; `FULLTEXT ... WITH PARSER ngram`
-  dopiero, gdy recall zacznie zawodzić (polska odmiana i diakrytyki).
-
-## Bezpieczeństwo
-
-- treść użytkownika jest **danymi** w `<ARTICLE>`; MASTERPROMPT zabrania wykonywania instrukcji z treści,
-- heurystyka `detectInjection()` oznacza próby wpływu i dopisuje ograniczenie do odpowiedzi (nie zmienia werdyktu),
-- walidacja wejścia (rozmiar, `http/https`, JSON) i osobne komunikaty błędów,
-- brak sekretów w repo; `.env` w `.gitignore`,
-- cache i logi to pliki lokalne (`data/`), możliwe do usunięcia.
-
-## Koszt (szacunek)
-
-Jedno sprawdzenie: ~$0.0003–$0.001 (gate + ekstrakcja + embeddingi; research z Google jest darmowy
-w ramach limitu). **1000 zapytań ≈ $0.3–$1.** Brak kosztu po stronie użytkownika.
-
-## Testy
-
-```bash
-node node_modules/typescript/bin/tsc --noEmit
-bun run scripts/test-verify.ts        # empty / injection / real claim
-bun run scripts/test-pipeline.ts      # ekstrakcja + cache
-bun run scripts/test-pipeline-cache.ts
-```
-
-## Ograniczenia i ryzyka
-
-- **halucynacje**: model tylko ekstrahuje i porównuje; werdykt bez dowodu jest zabroniony — brak dowodów
-  daje `insufficient_evidence`,
-- **stronniczość źródeł**: korpus oznaczony typem; źródło samo w sobie nie przesądza o werdykcie,
-- **aktualność**: wpisy mają okno ważności, ale recheck po stronie Redisa/schedulera nie jest jeszcze wpięty,
-- **prompt injection**: heurystyka + separacja danych; brak pełnego red-teamingu,
-- **prywatność**: logi zawierają treść zapytania — do produkcji potrzebna retencja i maskowanie,
-- **zależności**: OpenRouter, Jina, Google Fact Check; każda awaria kończy się statusem `error`, nie werdyktem,
-- **kanał Discord** jest utrzymywany w osobnym repozytorium i korzysta z `POST /verify`.
+**Challenge:** Ministerstwo Spraw Zagranicznych
