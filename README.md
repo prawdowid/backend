@@ -1,21 +1,25 @@
-# PRAWDOWID — backend weryfikacji doniesień oparty na źródłach
+# PRAWDOWID - backend weryfikacji doniesień oparty na źródłach
 
 PRAWDOWID przyjmuje tekst, adres URL, a także obraz z tekstem, rozkłada przekaz na sprawdzalne twierdzenia i zwraca werdykt wraz z dowodami. Wiarygodność wyniku nie wynika z deklarowanej pewności modelu: każda rozstrzygnięta teza ma prowadzić do cytatu, daty, wydawcy i adresu źródła, a brak wystarczającego dowodu prowadzi do wstrzymania werdyktu.
 
 To prototyp hackathonowy, którego działanie, metryki i granice są opisane w repozytorium. Nie jest opinią prawną ani zastępstwem dla analizy eksperckiej.
 
+![PRAWDOWID - weryfikacja doniesień](docs/assets/prawdowid-hero.png)
+
 ## Dlaczego to ważne
 
-Dezinformacja często korzysta z prawdziwie brzmiących fragmentów: przywołuje instytucje, liczby lub wydarzenia, ale pomija czas, kontekst albo źródło. W polskim obiegu informacyjnym sprawdzenie twierdzeń dotyczących prawa, wyborów, danych publicznych czy polityki zagranicznej powinno w pierwszej kolejności sięgać do źródeł właściwych dla danej sprawy — na przykład aktów prawnych, komunikatów urzędowych, danych statystyki publicznej albo obwieszczeń wyborczych.
+Dezinformacja często korzysta z prawdziwie brzmiących fragmentów: przywołuje instytucje, liczby lub wydarzenia, ale pomija czas, kontekst albo źródło. W polskim obiegu informacyjnym sprawdzenie twierdzeń dotyczących prawa, wyborów, danych publicznych czy polityki zagranicznej powinno w pierwszej kolejności sięgać do źródeł właściwych dla danej sprawy - na przykład aktów prawnych, komunikatów urzędowych, danych statystyki publicznej albo obwieszczeń wyborczych.
 
 PRAWDOWID nie traktuje odpowiedzi modelu językowego jako dowodu. Używa modelu do technicznych etapów przetwarzania tekstu, natomiast wynik przedstawia z materiałem źródłowym i jego metadanymi. Dzięki temu odbiorca może samodzielnie ocenić podstawę wniosku oraz sprawdzić jej aktualność.
 
 ## Jak działa
 
+![Przepływ weryfikacji](docs/assets/prawdowid-pipeline.png)
+
 1. **Wejście.** API przyjmuje tekst, URL lub obraz z tekstem. Tekst pod wskazanym URL jest odczytywany przed dalszym przetwarzaniem; dla obrazu stosowany jest OCR, a odpowiedź zawiera ograniczenie dotyczące niepewności metadanych obrazu.
-2. **Ekstrakcja twierdzeń.** Przekaz jest dzielony na atomowe relacje podmiot–orzeczenie–obiekt (SPO). Zdania złożone są rozbijane na odrębne twierdzenia, aby nie przypisać jednego dowodu do kilku różnych tez.
+2. **Ekstrakcja twierdzeń.** Przekaz jest dzielony na atomowe relacje podmiot - orzeczenie - obiekt (SPO). Zdania złożone są rozbijane na odrębne twierdzenia, aby nie przypisać jednego dowodu do kilku różnych tez.
 3. **Cache zależny od czasu.** Najpierw system szuka dokładnego klucza twierdzenia, potem używa embeddingów do utworzenia krótkiej listy podobnych wpisów. Każdy wpis może mieć granice `validFrom` i `validUntil`; dopasowanie uwzględnia datę materiału (`asOf`) albo bieżącą datę.
-4. **Research.** Dla twierdzeń nieznalezionych w cache przeszukiwane są źródła z manifestu, lokalny korpus dokumentów oraz — po skonfigurowaniu — Google Fact Check Tools. Lokalne snapshoty EUvsDisinfo są przeszukiwane bez tokenu w czasie działania; token jest potrzebny jedynie do ich odświeżenia.
+4. **Research.** Dla twierdzeń nieznalezionych w cache przeszukiwane są źródła z manifestu, lokalny korpus dokumentów oraz - po skonfigurowaniu - Google Fact Check Tools. Lokalne snapshoty EUvsDisinfo są przeszukiwane bez tokenu w czasie działania; token jest potrzebny jedynie do ich odświeżenia.
 5. **Werdykt i dowody.** Odpowiedź zawiera werdykt dla każdego twierdzenia, uzasadnienie, ograniczenia, siłę odpowiedzi i listę dowodów. **Brak dowodu oznacza wstrzymanie, a nie zgadywanie**: system zwraca wtedy `insufficient_evidence`.
 
 ### Werdykty i statusy
@@ -32,9 +36,9 @@ Werdykt twierdzenia ma jedną z wartości:
 
 Manifest `src/sources/manifest.ts` zawiera **135 pozycji**: **104** źródła `primary`, **21** `secondary` i **10** `fact_check`. Typ opisuje charakter źródła i jest jawny w odpowiedzi; sam w sobie nie przesądza o werdykcie.
 
-- **`primary`** — przede wszystkim źródła urzędowe i publiczne, m.in. Gov.pl, Dziennik Ustaw, Monitor Polski, ISAP, PKW, GUS, NBP, MSZ oraz EUR-Lex;
-- **`secondary`** — materiały pomocnicze i informacyjne, używane z oznaczeniem ich charakteru;
-- **`fact_check`** — publikacje i bazy weryfikacyjne, m.in. Demagog, AFP Fact Check, EUvsDisinfo, EDMO i Google Fact Check Tools.
+- **`primary`** - przede wszystkim źródła urzędowe i publiczne, m.in. Gov.pl, Dziennik Ustaw, Monitor Polski, ISAP, PKW, GUS, NBP, MSZ oraz EUR-Lex;
+- **`secondary`** - materiały pomocnicze i informacyjne, używane z oznaczeniem ich charakteru;
+- **`fact_check`** - publikacje i bazy weryfikacyjne, m.in. Demagog, AFP Fact Check, EUvsDisinfo, EDMO i Google Fact Check Tools.
 
 Każdy dowód zwracany przez API zawiera tytuł, wydawcę, datę publikacji, datę pobrania, URL, fragment cytowany oraz relację z twierdzeniem (`supports`, `refutes` lub `context`). W przypadku treści prasowych i fact-checkingowych system przechowuje krótkie fragmenty, a nie pełne artykuły.
 
@@ -59,7 +63,7 @@ W ostatnim udokumentowanym przebiegu z **22 listopada 2026 r.** (cold cache) zes
 | p95 | 15 661 ms |
 | E2E | 19/19 |
 
-Wynik zależy od lokalnych danych, sieci i dostępności dostawców. Ekstrakcja twierdzeń nie jest w pełni deterministyczna; dokumentacja opisuje wprost, że między uruchomieniami możliwa jest różnica 1–2 przypadków.
+Wynik zależy od lokalnych danych, sieci i dostępności dostawców. Ekstrakcja twierdzeń nie jest w pełni deterministyczna; dokumentacja opisuje wprost, że między uruchomieniami możliwa jest różnica 1 - 2 przypadków.
 
 ## Dlaczego lookupy są tanie
 
@@ -67,7 +71,7 @@ Wynik zależy od lokalnych danych, sieci i dostępności dostawców. Ekstrakcja 
 
 Trafienie w cache nie oznacza kosztu zerowego: ekstrakcja twierdzeń jest wykonywana zawsze, podobnie jak embeddingi niezbędne do dopasowania. Pozwala jednak pominąć research (w tym Google, Wikidata, Wikipedię i EUvsDisinfo) oraz bramki porównujące twierdzenia. Przy skutecznym trafieniu nie ma dodatkowego lookupu researchowego do płatnego API; koszt samej ekstrakcji lub embeddingów może pozostać.
 
-Pomiar pięciu przypadków w [`docs/EVAL.md`](docs/EVAL.md) wykazał łączny koszt **0,003269 USD** dla cold cache i **0,002121 USD** dla warm cache, czyli spadek o **35,1%**. W ostatnim przebiegu ewaluacji koszt cold wyniósł **0,000473 USD na zapytanie** (około **0,047 USD / 100**). Dla krótkich przypadków w osobnym pomiarze warm cache redukował koszt o 77–83%; dla długiego artykułu bez zcache’owanych, rozstrzygniętych twierdzeń oszczędność nie wystąpiła.
+Pomiar pięciu przypadków w [`docs/EVAL.md`](docs/EVAL.md) wykazał łączny koszt **0,003269 USD** dla cold cache i **0,002121 USD** dla warm cache, czyli spadek o **35,1%**. W ostatnim przebiegu ewaluacji koszt cold wyniósł **0,000473 USD na zapytanie** (około **0,047 USD / 100**). Dla krótkich przypadków w osobnym pomiarze warm cache redukował koszt o 77 - 83%; dla długiego artykułu bez zcache’owanych, rozstrzygniętych twierdzeń oszczędność nie wystąpiła.
 
 ## Architektura
 
@@ -118,7 +122,9 @@ cp .env.example .env
 bun run dev
 ```
 
-Serwer domyślnie działa pod adresem `http://localhost:3000`. Backend nie serwuje własnego UI — jedynym interfejsem jest Swagger pod `/docs`. Interfejs użytkownika to osobna aplikacja frontendowa.
+Serwer domyślnie działa pod adresem `http://localhost:3000`. Backend nie serwuje własnego UI - jedynym interfejsem jest Swagger pod `/docs`. Interfejs użytkownika to osobna aplikacja frontendowa.
+
+![Interfejs PRAWDOWID](docs/assets/prawdowid-ui.png)
 
 ### Konfiguracja środowiska
 
@@ -158,8 +164,8 @@ Skrypty ewaluacji i pomiaru kosztu opisuje [`docs/EVAL.md`](docs/EVAL.md).
 - **Zależności zewnętrzne.** Dostępność OpenRoutera, usług embeddingów, OCR oraz opcjonalnych źródeł zewnętrznych wpływa na możliwość przeprowadzenia sprawdzenia.
 - **Prompt injection.** Treść użytkownika jest umieszczana jako dane, a nie instrukcje; heurystyka wykrywa próby wpływu i dodaje ograniczenie do odpowiedzi. Nie przeprowadzono pełnego red-teamingu.
 - **Dane osobowe.** Logi zawierają treść zgłoszenia. Przed wdrożeniem produkcyjnym potrzebne są polityka retencji i maskowanie danych osobowych; w materiałach zgłoszeniowych wskazano maskowanie e-maili i numerów oraz skrypt czyszczący.
-- **Limity wejścia.** Tekst może mieć do 100 000 znaków; obraz PNG/JPEG/WebP — do 8 MB po zdekodowaniu. Odczyt OCR nie jest niezależną weryfikacją obrazu ani jego metadanych.
-- **Moderacja.** Po trzecim podobnym zgłoszeniu system zapisuje alert i może wywołać webhook. Bez webhooka sprawa pozostaje otwarta z jawną rekomendacją przekazania — system nie deklaruje przekazania, którego nie wykonał.
+- **Limity wejścia.** Tekst może mieć do 100 000 znaków; obraz PNG/JPEG/WebP - do 8 MB po zdekodowaniu. Odczyt OCR nie jest niezależną weryfikacją obrazu ani jego metadanych.
+- **Moderacja.** Po trzecim podobnym zgłoszeniu system zapisuje alert i może wywołać webhook. Bez webhooka sprawa pozostaje otwarta z jawną rekomendacją przekazania - system nie deklaruje przekazania, którego nie wykonał.
 
 ## Źródła i licencje
 
@@ -172,7 +178,7 @@ Pełny wykaz źródeł, zasady aktualizacji, format lokalnego snapshotu oraz war
 
 ---
 
-**Zespół:** KN Neuron Prawdowid, UMG — Wydział Informatyczny
+**Zespół:** KN Neuron Prawdowid, UMG - Wydział Informatyczny
 
 **Wydarzenie:** HackNation 2026
 
