@@ -16,6 +16,7 @@ import { Markdown } from "../modules/utils";
 import { OpenRouterWrapper } from "../modules/openrouter";
 import { searchSources } from "../sources";
 import { searchDisinfoCases } from "./euvsdisinfo";
+import { searchWeb } from "./search";
 import type {
     ClaimInput,
     ClaimVerdict,
@@ -338,26 +339,54 @@ type WikipediaPages = {
     query?: { pages?: Record<string, { title?: string; extract?: string }> };
 };
 
+/**
+ * Wikipedia is strict about bursts. Serialize requests, space them, cache
+ * responses and enter a cooldown after a 429 instead of hammering per claim.
+ */
+const WIKI_MIN_INTERVAL_MS = 300;
+const WIKI_COOLDOWN_MS = 30_000;
+const wikiCache = new Map<string, unknown>();
+let wikiQueue: Promise<void> = Promise.resolve();
+let wikiCooldownUntil = 0;
+
+function wikiGate(): Promise<void> {
+    const next = wikiQueue.then(
+        () => new Promise<void>((resolve) => setTimeout(resolve, WIKI_MIN_INTERVAL_MS)),
+    );
+    wikiQueue = next.then(
+        () => undefined,
+        () => undefined,
+    );
+    return next.then(() => undefined);
+}
+
 async function wikipediaJson<T>(url: string): Promise<T> {
-    for (let attempt = 0; attempt < 2; attempt++) {
-        const response = await fetch(url, {
-            headers: {
-                "user-agent": "PrawdowidBot/1.0 (fact-checking prototype; contact: local)",
-                accept: "application/json",
-            },
-            signal: AbortSignal.timeout(6000),
-        });
+    const cached = wikiCache.get(url);
+    if (cached !== undefined) return cached as T;
 
-        if (response.status === 429 && attempt === 0) {
-            await new Promise((resolve) => setTimeout(resolve, 1500));
-            continue;
-        }
-
-        if (!response.ok) throw new Error(`Wikipedia ${response.status}`);
-        return (await response.json()) as T;
+    if (Date.now() < wikiCooldownUntil) {
+        throw new Error("Wikipedia cooldown");
     }
 
-    throw new Error("Wikipedia 429");
+    await wikiGate();
+
+    const response = await fetch(url, {
+        headers: {
+            "user-agent": "PrawdowidBot/1.0 (fact-checking prototype; contact: local)",
+            accept: "application/json",
+        },
+        signal: AbortSignal.timeout(8000),
+    });
+
+    if (response.status === 429) {
+        wikiCooldownUntil = Date.now() + WIKI_COOLDOWN_MS;
+        throw new Error("Wikipedia 429");
+    }
+    if (!response.ok) throw new Error(`Wikipedia ${response.status}`);
+
+    const data = (await response.json()) as T;
+    wikiCache.set(url, data);
+    return data;
 }
 
 async function classifySentences(
@@ -619,6 +648,16 @@ function decide(params: {
 
     // 5. Sources against, nothing for.
     if (refutes.length > 0 && supports.length === 0) {
+        // A lone secondary refute is not enough for a `false` verdict.
+        if (refutes.length === 1 && refutes[0]!.type === "secondary") {
+            return {
+                verdict: "insufficient_evidence",
+                confidence: 0.3,
+                reasoning:
+                    "Jedno źródło wtórne przeczy temu twierdzeniu, ale to za mało, aby rozstrzygnąć.",
+            };
+        }
+
         return {
             verdict: "false",
             confidence: clamp(0.6 + (refutes.length >= 2 ? 0.1 : 0), 0.5, 0.8),
@@ -835,6 +874,55 @@ async function researchOne(
             if (wiki.length > 0) limitations.push("Wykorzystano źródło wtórne (Wikipedia).");
         } catch {
             limitations.push("Wikipedia była niedostępna.");
+        }
+    }
+
+    // Web search: discovery only. A result must be fetched, quoted and gated by Jev.
+    const hasSearchKey = Boolean(process.env["BRAVE_SEARCH_API_KEY"] ?? process.env["TAVILY_API_KEY"]);
+    if (
+        !ctx.offline &&
+        hasSearchKey &&
+        !evidence.some((item) => item.relation === "supports" || item.relation === "refutes")
+    ) {
+        const fact = claim.fact;
+        const query = fact
+            ? `${fact.s} ${fact.p.replace(/_/g, " ")} ${fact.o}`.trim()
+            : claim.text;
+
+        try {
+            const results = await searchWeb(query, 5);
+            const candidates = results.filter((item) => item.tier !== "D").slice(0, 2);
+            const pages = await Promise.allSettled(candidates.map((item) => fetchPageText(item.url)));
+
+            for (let index = 0; index < candidates.length; index++) {
+                const candidate = candidates[index]!;
+                if (seenUrls.has(candidate.url.toLowerCase())) continue;
+
+                const page = pages[index];
+                if (page?.status !== "fulfilled" || page.value.trim().length === 0) continue;
+
+                const match = matchingSentence(page.value, claim);
+                if (!match) continue;
+
+                const relation = (await classifySentences(claim.text, [match]))[0] ?? null;
+                if (!relation) continue;
+
+                seenUrls.add(candidate.url.toLowerCase());
+                evidence.push({
+                    title: candidate.title || candidate.url,
+                    publisher: new URL(candidate.url).hostname.replace(/^www\./, ""),
+                    publishedAt: null,
+                    retrievedAt,
+                    url: candidate.url,
+                    excerpt: match.slice(0, 400),
+                    type: candidate.tier === "A" ? "primary" : candidate.tier === "B" ? "fact_check" : "secondary",
+                    relation,
+                });
+            }
+
+            if (candidates.length > 0) limitations.push("Wykorzystano wyszukiwarkę internetową (Brave/Tavily).");
+        } catch {
+            limitations.push("Wyszukiwarka internetowa była niedostępna.");
         }
     }
 

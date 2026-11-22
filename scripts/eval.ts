@@ -277,8 +277,25 @@ async function runCase(testCase: EvalCase): Promise<CaseResult> {
             httpStatus: null,
         };
 
+    function aggregateVerdict(verdicts: Verdict[]): Verdict {
+    if (verdicts.length === 0) return "insufficient_evidence";
+
+    const unique = new Set(verdicts);
+    if (unique.size === 1) return verdicts[0]!;
+
+    // Partial confirmation mixed with unknown or refuted parts.
+    if (unique.has("misleading")) return "misleading";
+    if (unique.has("false") && unique.has("confirmed")) return "misleading";
+    if (unique.has("confirmed") && unique.has("insufficient_evidence")) return "misleading";
+    if (unique.has("false") && unique.has("insufficient_evidence")) return "false";
+    if (unique.has("false")) return "false";
+    if (unique.has("not_verifiable") && unique.size === 1) return "not_verifiable";
+
+    return "insufficient_evidence";
+}
+
     const verdicts = safe.claims.map((claim) => claim.verdict);
-    const predicted = verdicts[0] ?? null;
+    const predicted = verdicts.length > 0 ? aggregateVerdict(verdicts) : "insufficient_evidence";
 
     return {
         id: testCase.id,
