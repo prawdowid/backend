@@ -104,7 +104,6 @@ sprawcy i porównuje ją z twierdzeniem. Dzięki temu „Polak” daje `confirme
 - `bun run scripts/eval.ts` → `data/eval/report.json` (macro-F1, pokrycie i poprawność cytowań,
   wstrzymanie, injection, mediana, koszt).
 - `bun run scripts/e2e.ts` → E2E i spójność kanałów.
-- `bun run scripts/ui-check.ts` → dostępność interfejsu.
 - Szczegóły: `docs/EVAL.md`.
 
 ## Ryzyka

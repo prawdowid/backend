@@ -1,10 +1,8 @@
 /**
- * HTTP API for the fact-checking pipeline: /verify, /health, /metrics and the web UI.
+ * HTTP API for the fact-checking pipeline: /verify, /health, /metrics, /cases and Swagger at /docs.
  * Mount it on the main app with `app.use(verificationApi)`.
  */
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import { Elysia, t } from "elysia";
 import { defaultCache, verifyInput } from "../pipeline/verify";
 import { DISCLAIMER_PL, type VerifyRequest, type VerifyResponse } from "../pipeline/types";
@@ -15,8 +13,6 @@ const MAX_TEXT = 100_000;
 /** Base64 or data URL. ~12M chars covers an 8 MB image plus prefix and padding. */
 const MAX_IMAGE_CHARS = 12_000_000;
 const VERSION = "0.1.0";
-
-const PUBLIC_INDEX = fileURLToPath(new URL("../../public/index.html", import.meta.url));
 
 const VALIDATION_LIMITATIONS = [
     "Przyjmuję tekst do 100 000 znaków, poprawny adres URL (http/https) albo zdjęcie (PNG/JPEG/WebP, do 8 MB).",
@@ -77,15 +73,6 @@ function isHttpUrl(value: string): boolean {
     } catch {
         return false;
     }
-}
-
-function html(body: string): Response {
-    return new Response(body, {
-        headers: {
-            "content-type": "text/html; charset=utf-8",
-            "cache-control": "no-store",
-        },
-    });
 }
 
 const RATE_WINDOW_MS = 60_000;
@@ -248,24 +235,4 @@ export const verificationApi = new Elysia({ name: "verification-api" })
         }
         return { ok: true, case: acknowledged };
     })
-    .get("/metrics", () => getMetrics())
-    .get("/", async () => {
-        try {
-            return html(await readFile(PUBLIC_INDEX, "utf8"));
-        } catch {
-            return new Response("Brak interfejsu.", {
-                status: 500,
-                headers: { "content-type": "text/plain; charset=utf-8" },
-            });
-        }
-    })
-    .get("/index.html", async () => {
-        try {
-            return html(await readFile(PUBLIC_INDEX, "utf8"));
-        } catch {
-            return new Response("Brak interfejsu.", {
-                status: 500,
-                headers: { "content-type": "text/plain; charset=utf-8" },
-            });
-        }
-    });
+    .get("/metrics", () => getMetrics());

@@ -103,8 +103,7 @@ Kanały WWW i API korzystają z tej samej funkcji `verifyInput`; zewnętrzny bot
 | `GET` | `/metrics` | Liczniki, p50/p95 i średni koszt. |
 | `GET` | `/cases` | Nierozstrzygnięte sprawy moderatora. |
 | `POST` | `/cases/:id/ack` | Potwierdzenie przejęcia sprawy przez moderatora. |
-| `GET` | `/` | Polski interfejs WWW, bez CDN. |
-| `GET` | `/docs` | Dokumentacja Swagger. |
+| `GET` | `/docs` | Dokumentacja Swagger (jedyne UI serwowane przez backend). |
 
 `POST /verify` ma limit **20 zapytań na minutę na adres IP**. Limit jest pamięciowy i przeznaczony dla demonstracji, nie jest rozproszonym mechanizmem produkcyjnym.
 
@@ -119,7 +118,7 @@ cp .env.example .env
 bun run dev
 ```
 
-Serwer domyślnie działa pod adresem `http://localhost:3000`. Interfejs WWW jest dostępny pod `/`, a dokumentacja API pod `/docs`.
+Serwer domyślnie działa pod adresem `http://localhost:3000`. Backend nie serwuje własnego UI — jedynym interfejsem jest Swagger pod `/docs`. Interfejs użytkownika to osobna aplikacja frontendowa.
 
 ### Konfiguracja środowiska
 

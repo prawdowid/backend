@@ -8,12 +8,10 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 
 # Kod runtime oraz pliki, które serwer czyta z dysku:
-#   ../../public/index.html  -> /app/public/index.html
 #   ../../corpus/corpus.jsonl -> /app/corpus/corpus.jsonl
-# data/ NIE jest kopiowane: katalog jest w .gitignore, a w compose jest
-# bind mountem (albo pustym, zapisywalnym katalogiem utworzonym poniżej).
+# data/ NIE jest kopiowane: katalog jest w .gitignore, w compose jest
+# named volume (albo pustym, zapisywalnym katalogiem utworzonym poniżej).
 COPY src ./src
-COPY public ./public
 COPY corpus ./corpus
 
 # Zapisywalny stan runtime (logi, cache, metryki, moderacja, alerty).

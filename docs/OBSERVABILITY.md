@@ -132,9 +132,8 @@ Po czyszczeniu warto sprawdzić `/cases` i `/metrics` — liczniki w pamięci ni
 
 ```bash
 node ./node_modules/typescript/bin/tsc --noEmit   # typy (obejmuje src/)
-bun run scripts/ui-check.ts                       # statyczna kontrola UI (formularz, aria, werdykty, brak CDN)
 bun run scripts/cleanup.ts --dry-run              # retencja bez zmian
 bun run scripts/e2e.ts                            # pełny E2E na porcie 3110 (1-3 min, woła modele)
 ```
 
-`e2e.ts` podnosi serwer jako proces potomny, sprawdza `/health`, `/metrics`, `/`, kontrakt `/verify`, spójność kanałów `web`/`api`, odrzucenia wejścia, eskalację powtarzanego pytania i rate limit, a na końcu ubija proces (na Windows także przez `taskkill`). Kod wyjścia 1 = cokolwiek nie zagrało.
+`e2e.ts` podnosi serwer jako proces potomny, sprawdza `/health`, `/metrics`, `/docs`, kontrakt `/verify`, spójność kanałów `web`/`api`, odrzucenia wejścia, eskalację powtarzanego pytania i rate limit, a na końcu ubija proces (na Windows także przez `taskkill`). Kod wyjścia 1 = cokolwiek nie zagrało.

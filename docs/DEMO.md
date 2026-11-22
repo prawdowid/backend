@@ -107,7 +107,7 @@ Oczekiwane: `count >= 3`, `recommended`/`escalated` zależnie od `MODERATOR_WEBH
 
 ## 8. Obraz (15 s)
 
-W UI wybierz `Zrzut ekranu 2026-10-09 082411.png` → sprawdź. Pokaż badge **EKSPERYMENTALNE**
+W interfejsie frontendu wybierz `Zrzut ekranu 2026-10-09 082411.png` → sprawdź. Pokaż badge **EKSPERYMENTALNE**
 i limitation OCR.
 
 ## Zamknięcie (10 s)

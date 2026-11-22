@@ -190,11 +190,11 @@ try {
         `HTTP ${metrics.status}, content-type=${metrics.contentType}`,
     );
 
-    const index = await request("/", {}, 5_000);
+    const docs = await request("/docs", {}, 5_000);
     check(
-        "a) GET / -> 200, text/html, treść UI",
-        index.status === 200 && index.contentType.includes("text/html") && index.text.includes("Sprawdzarka doniesień"),
-        `HTTP ${index.status}, content-type=${index.contentType}`,
+        "a) GET /docs -> 200, dokumentacja HTML",
+        docs.status === 200 && docs.contentType.includes("text/html") && docs.text.length > 200,
+        `HTTP ${docs.status}, content-type=${docs.contentType}`,
     );
 
     // --- b) /verify z tekstem ---------------------------------------------
